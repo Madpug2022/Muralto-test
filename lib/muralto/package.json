@@ -1,0 +1,35 @@
+{
+  "name": "@infinity/muralto",
+  "version": "0.1.0",
+  "main": "dist/muralto.cjs.js",
+  "module": "dist/muralto.es.js",
+  "exports": {
+    ".": {
+      "import": "./dist/muralto.es.js",
+      "require": "./dist/muralto.cjs.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "peerDependencies": {
+    "@react-three/drei": "^9.120.4",
+    "@react-three/fiber": "^8.17.10",
+    "@react-three/postprocessing": "^2.16.3",
+    "leva": "^0.9.35",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three-csm": "^4.2.1",
+    "react-icons": "^5.4.0"
+  },
+  "dependencies": {
+    "three": "^0.171.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.3"
+  }
+}
