@@ -1,5 +1,5 @@
 // @ts-ignore
-import { Visor } from "@infinity/muralto";
+import { Visor } from "@madpug2022/muralto";
 import "./App.css";
 
 function App() {

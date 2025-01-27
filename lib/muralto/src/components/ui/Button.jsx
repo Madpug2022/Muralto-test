@@ -8,10 +8,13 @@ function Button({ children, onClick }) {
         justifyContent: "center",
         height: "2rem",
         width: "2rem",
-        background: "transparent",
+        background: "#f9f9f9",
+        color: "#3D3C3B",
+        borderRadius: "50%",
+        boxShadow: "0 0 5px rgba(0, 0, 0, 0.1)",
         border: "none",
         cursor: "pointer",
-        padding: "0.3rem",
+        padding: "0.2rem",
       }}
     >
       {children}

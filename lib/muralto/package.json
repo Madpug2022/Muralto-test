@@ -1,6 +1,6 @@
 {
-  "name": "@infinity/muralto",
-  "version": "0.1.0",
+  "name": "@madpug2022/muralto",
+  "version": "0.1.7",
   "main": "dist/muralto.cjs.js",
   "module": "dist/muralto.es.js",
   "exports": {
@@ -16,13 +16,12 @@
     "registry": "https://npm.pkg.github.com"
   },
   "peerDependencies": {
-    "@react-three/drei": "^9.120.4",
-    "@react-three/fiber": "^8.17.10",
-    "@react-three/postprocessing": "^2.16.3",
-    "leva": "^0.9.35",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "three-csm": "^4.2.1",
+    "dat.gui": "^0.7.9",
+    "gsap": "^3.12.5",
+    "lgl-tracer": "^2.0.0",
+    "postprocessing": "^6.36.6",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
     "react-icons": "^5.4.0"
   },
   "dependencies": {
