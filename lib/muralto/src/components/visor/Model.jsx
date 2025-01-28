@@ -3,22 +3,22 @@ import * as THREE from "three";
 // Importa los loaders y controles que necesitas
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import muraltoModelUrl from "../../assets/Muralto/model.glb";
-
+import * as dat from "dat.gui";
 // Importa el compositor y los passes
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+
 import { CiMaximize2 } from "react-icons/ci";
 import { PiBoundingBox } from "react-icons/pi";
 import { MdOutlineCameraIndoor } from "react-icons/md";
 
-import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader";
 import { gsap } from "gsap";
 
 import Button from "../ui/Button";
 import Helper from "../ui/Helper";
 import MenuButton from "../ui/MenuButton";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { N8AOPass } from "n8ao";
 
 const Visor = () => {
   const [showCameraControls, setShowCameraControls] = useState(false);
