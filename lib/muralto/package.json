@@ -22,7 +22,8 @@
     "postprocessing": "^6.36.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "react-icons": "^5.4.0"
+    "react-icons": "^5.4.0",
+    "n8ao": "^1.9.4"
   },
   "dependencies": {
     "three": "^0.171.0"

@@ -93,17 +93,34 @@ const Visor = () => {
     });
     transformControlsRef.current = control;
 
-    // Iluminación
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene.add(ambientLight);
-
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.8);
-    hemiLight.position.set(0, 20, 0);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.5);
     scene.add(hemiLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(8, 30, 7);
+    const directionalLight = new THREE.DirectionalLight();
+    // Ajustes de la luz direccional
+    directionalLight.color.setHex(0xffffff);
+    directionalLight.intensity = 4;
     directionalLight.castShadow = true;
+
+    // Elevation y azimuth en radianes
+    const elevation = 1.5;
+    const azimuth = 0.75;
+
+    // Para posicionar la luz usando coordenadas esféricas
+    // Radio “r” puede ser la distancia que quieras
+    const r = 50;
+    const x = r * Math.sin(elevation) * Math.cos(azimuth);
+    const y = r * Math.cos(elevation);
+    const z = r * Math.sin(elevation) * Math.sin(azimuth);
+
+    directionalLight.position.set(x, y, z);
+
+    // Ajusta el radio de sombra a 0 para sombras más definidas
+    directionalLight.shadow.radius = 0;
+
+    // Configura el resto de parámetros de sombra que consideres necesarios
     directionalLight.shadow.mapSize.width = 8192;
     directionalLight.shadow.mapSize.height = 8192;
     directionalLight.shadow.camera.near = 0.1;
@@ -114,21 +131,160 @@ const Visor = () => {
     directionalLight.shadow.camera.bottom = -15;
     directionalLight.shadow.bias = -0.0002;
     directionalLight.shadow.normalBias = 0.001;
-    directionalLight.shadow.radius = 4;
+
     scene.add(directionalLight);
 
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    fillLight.position.set(-30, 20, 20);
-    scene.add(fillLight);
+    const gui = new dat.GUI();
+    const ambientFolder = gui.addFolder("Ambient Light");
+    ambientFolder.add(ambientLight, "intensity", 0, 10, 0.1).name("Intensity");
+    const params = {
+      color: ambientLight.color.getHex(),
+    };
+    ambientFolder
+      .addColor(params, "color")
+      .name("Color")
+      .onChange((value) => {
+        // value llega en formato 0xRRGGBB
+        ambientLight.color.setHex(value);
+      });
+    const hemiLightFolder = gui.addFolder("Hemisphere Light");
+    hemiLightFolder.add(hemiLight, "intensity", 0, 10, 0.1).name("Intensity");
 
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.7);
-    backLight.position.set(0, 15, -30);
-    backLight.castShadow = false;
-    scene.add(backLight);
+    // Control del color del cielo
+    const hemiLightParams = {
+      skyColor: hemiLight.color.getHex(), // Color del cielo inicial
+      groundColor: hemiLight.groundColor.getHex(), // Color del suelo inicial
+    };
+
+    hemiLightFolder
+      .addColor(hemiLightParams, "skyColor")
+      .name("Sky Color")
+      .onChange((value) => {
+        hemiLight.color.setHex(value); // Actualizar el color del cielo
+      });
+
+    hemiLightFolder
+      .addColor(hemiLightParams, "groundColor")
+      .name("Ground Color")
+      .onChange((value) => {
+        hemiLight.groundColor.setHex(value); // Actualizar el color del suelo
+      });
+    // Crear una carpeta para los controles de la luz direccional
+    const dirLightFolder = gui.addFolder("Directional Light");
+
+    // Control de la intensidad
+    dirLightFolder
+      .add(directionalLight, "intensity", 0, 10, 0.1)
+      .name("Intensity");
+
+    // Control del color de la luz
+    const dirLightParams = {
+      color: directionalLight.color.getHex(), // Color inicial
+    };
+
+    dirLightFolder
+      .addColor(dirLightParams, "color")
+      .name("Color")
+      .onChange((value) => {
+        directionalLight.color.setHex(value); // Actualizar el color
+      });
+
+    // Control de la posición
+    const dirLightPosition = {
+      x: directionalLight.position.x,
+      y: directionalLight.position.y,
+      z: directionalLight.position.z,
+    };
+
+    dirLightFolder
+      .add(dirLightPosition, "x", -100, 100, 0.1)
+      .name("Position X")
+      .onChange((value) => {
+        directionalLight.position.x = value; // Actualizar la posición en el eje X
+      });
+
+    dirLightFolder
+      .add(dirLightPosition, "y", -100, 100, 0.1)
+      .name("Position Y")
+      .onChange((value) => {
+        directionalLight.position.y = value; // Actualizar la posición en el eje Y
+      });
+
+    dirLightFolder
+      .add(dirLightPosition, "z", -100, 100, 0.1)
+      .name("Position Z")
+      .onChange((value) => {
+        directionalLight.position.z = value; // Actualizar la posición en el eje Z
+      });
+
+    const spotLights = [];
+    const spotLightParams = [];
+
+    for (let i = 0; i < 5; i++) {
+      const spotLight = new THREE.SpotLight(0xffffff, 1);
+      spotLight.position.set((i - 2) * 5, 10, 5); // Posiciones iniciales
+      spotLight.castShadow = true;
+      spotLight.angle = Math.PI / 6; // Ángulo del cono
+      spotLight.penumbra = 0.5; // Suavidad en los bordes
+      scene.add(spotLight);
+
+      // Añadimos la luz al array
+      spotLights.push(spotLight);
+
+      // Creamos parámetros iniciales para cada luz
+      spotLightParams.push({
+        color: spotLight.color.getHex(),
+        intensity: spotLight.intensity,
+        x: spotLight.position.x,
+        y: spotLight.position.y,
+        z: spotLight.position.z,
+      });
+
+      // Crear una carpeta para cada SpotLight en dat.gui
+      const folder = gui.addFolder(`SpotLight ${i + 1}`);
+
+      // Control de color
+      folder
+        .addColor(spotLightParams[i], "color")
+        .name("Color")
+        .onChange((value) => {
+          spotLight.color.setHex(value);
+        });
+
+      // Control de intensidad
+      folder
+        .add(spotLightParams[i], "intensity", 0, 10, 0.1)
+        .name("Intensity")
+        .onChange((value) => {
+          spotLight.intensity = value;
+        });
+
+      // Controles de posición
+      folder
+        .add(spotLightParams[i], "x", -20, 20, 0.1)
+        .name("Position X")
+        .onChange((value) => {
+          spotLight.position.x = value;
+        });
+
+      folder
+        .add(spotLightParams[i], "y", 0, 20, 0.1)
+        .name("Position Y")
+        .onChange((value) => {
+          spotLight.position.y = value;
+        });
+
+      folder
+        .add(spotLightParams[i], "z", -20, 20, 0.1)
+        .name("Position Z")
+        .onChange((value) => {
+          spotLight.position.z = value;
+        });
+    }
 
     let meshList = [];
     loader.load(
-      muraltoModelUrl,
+      modelRoute,
       (glb) => {
         const model = glb.scene;
         model.traverse((node) => {
@@ -138,7 +294,12 @@ const Visor = () => {
             node.material.side = THREE.DoubleSide;
             node.castShadow = true;
             node.receiveShadow = true;
-            meshList.push(node);
+
+            const match = node.name.match(/<(\d{7})/);
+
+            const number = match && match[1];
+
+            meshList.push(number);
             node.geometry.computeVertexNormals();
           }
         });
@@ -156,13 +317,44 @@ const Visor = () => {
       }
     );
 
-    // ----------- POSTPROCESADO ------------
-    // 1. Crear composer
     const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const n8aopass = new N8AOPass(scene, camera, width, height);
+    composer.addPass(n8aopass);
+    n8aopass.configuration.gammaCorrection = false;
+    n8aopass.configuration.aoRadius = 5.0;
+    n8aopass.configuration.distanceFalloff = 1.0;
+    n8aopass.configuration.intensity = 5.0;
+    n8aopass.configuration.color = new THREE.Color(0, 0, 0);
 
-    // 2. Agregar RenderPass (renderizado base de la escena)
-    const renderPass = new RenderPass(scene, camera);
-    composer.addPass(renderPass);
+    n8aopass.setQualityMode("high");
+
+    const renderTarget = new THREE.WebGLRenderTarget(width, height);
+    // If you just want a depth buffer
+    renderTarget.depthTexture = new THREE.DepthTexture(
+      width,
+      height,
+      THREE.UnsignedIntType
+    );
+    renderTarget.depthTexture.format = THREE.DepthFormat;
+    // If you want a depth buffer and a stencil buffer
+    renderTarget.depthTexture = new THREE.DepthTexture(
+      width,
+      height,
+      THREE.UnsignedInt248Type
+    );
+    renderTarget.depthTexture.format = THREE.DepthStencilFormat;
+
+    const nnfolder = gui.addFolder(`AAO`);
+    nnfolder
+      .add(n8aopass.configuration, "aoRadius", 0.1, 10, 0.1)
+      .name("AO Radius");
+    nnfolder
+      .add(n8aopass.configuration, "distanceFalloff", 0.1, 5, 0.1) // Rango de 0.1 a 5 con pasos de 0.1
+      .name("Distance Falloff");
+    nnfolder
+      .add(n8aopass.configuration, "intensity", 0, 10, 0.1) // Rango de 0 a 10 con pasos de 0.1
+      .name("Intensity");
 
     // Función de animación
     const animate = () => {
@@ -177,20 +369,12 @@ const Visor = () => {
 
     animate();
 
-    // Ajustar tamaño en caso de resize
-    const handleResize = () => {
-      const w = visorRef.current.clientWidth;
-      const h = visorRef.current.clientHeight;
-
-      camera.aspect = w / h;
+    window.addEventListener("resize", () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-
-      // Importante: también ajustar el tamaño de los passes
-      composer.setSize(w, h);
-    };
-
-    window.addEventListener("resize", handleResize);
+    });
 
     // Limpieza
     return () => {
@@ -514,7 +698,7 @@ const Visor = () => {
           <div style={{ overflowY: "auto", maxHeight: "200px" }}>
             {meshes.map((mesh, index) => (
               <p style={{ margin: 0, fontSize: "10px" }} key={index}>
-                {mesh.name}
+                {mesh}
               </p>
             ))}
           </div>
