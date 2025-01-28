@@ -13,12 +13,14 @@ import { PiBoundingBox } from "react-icons/pi";
 import { MdOutlineCameraIndoor } from "react-icons/md";
 
 import { gsap } from "gsap";
+import modelUrl from "../../assets/Muralto/model.glb";
 
 import Button from "../ui/Button";
 import Helper from "../ui/Helper";
 import MenuButton from "../ui/MenuButton";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { N8AOPass } from "n8ao";
+import { DRACOLoader } from "three/examples/jsm/Addons.js";
 
 const Visor = () => {
   const [showCameraControls, setShowCameraControls] = useState(false);
@@ -284,7 +286,7 @@ const Visor = () => {
 
     let meshList = [];
     loader.load(
-      modelRoute,
+      modelUrl,
       (glb) => {
         const model = glb.scene;
         model.traverse((node) => {
