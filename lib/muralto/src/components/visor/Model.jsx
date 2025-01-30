@@ -24,6 +24,7 @@ import { DRACOLoader } from "three/examples/jsm/Addons.js";
 
 const Visor = () => {
   const [showCameraControls, setShowCameraControls] = useState(false);
+  const [searcher, setSearcher] = useState("");
   const [cuttingActive, setCuttingActive] = useState(false);
   const [meshes, setMeshes] = useState([]);
   const visorRef = useRef();
@@ -36,6 +37,19 @@ const Visor = () => {
   const clippingPlaneRef = useRef(null);
   const planeMeshRef = useRef(null);
   const transformControlsRef = useRef(null);
+  const modelRef = useRef(null);
+  const composerRef = useRef(null);
+  const n8aopassRef = useRef(null);
+  const originalMaterialsRef = useRef({});
+
+  const darkerTransparentGrayMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd3d3d3,
+    transparent: true,
+    roughness: 0.2,
+    opacity: 0.07,
+    metalness: 0.08,
+    depthWrite: false,
+  });
 
   // Cargar modelo GLB
   const loader = new GLTFLoader();
@@ -54,6 +68,7 @@ const Visor = () => {
     // Crear escena, cámara y renderer
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xdae7f2);
+    const gui = new dat.GUI();
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
@@ -122,9 +137,12 @@ const Visor = () => {
     // Ajusta el radio de sombra a 0 para sombras más definidas
     directionalLight.shadow.radius = 0;
 
+    const helper = new THREE.DirectionalLightHelper(directionalLight, 5);
+    scene.add(helper);
+
     // Configura el resto de parámetros de sombra que consideres necesarios
-    directionalLight.shadow.mapSize.width = 8192;
-    directionalLight.shadow.mapSize.height = 8192;
+    directionalLight.shadow.mapSize.width = 4096 * 2;
+    directionalLight.shadow.mapSize.height = 4096 * 2;
     directionalLight.shadow.camera.near = 0.1;
     directionalLight.shadow.camera.far = 100;
     directionalLight.shadow.camera.left = -15;
@@ -136,7 +154,17 @@ const Visor = () => {
 
     scene.add(directionalLight);
 
-    const gui = new dat.GUI();
+    const cameraFolder = gui.addFolder("Camera");
+    // agregar fov
+    cameraFolder.add(camera, "fov", 1, 180, 1).name("FOV");
+
+    const bgparams = {
+      backgroundColor: `#${scene.background.getHexString()}`,
+    };
+
+    gui.addColor(bgparams, "backgroundColor").onChange((value) => {
+      scene.background.set(value);
+    });
     const ambientFolder = gui.addFolder("Ambient Light");
     ambientFolder.add(ambientLight, "intensity", 0, 10, 0.1).name("Intensity");
     const params = {
@@ -173,6 +201,96 @@ const Visor = () => {
       });
     // Crear una carpeta para los controles de la luz direccional
     const dirLightFolder = gui.addFolder("Directional Light");
+
+    const shadowParams = {
+      mapSize: 8192, // Valor inicial basado en 4096 * 2
+      near: directionalLight.shadow.camera.near,
+      far: directionalLight.shadow.camera.far,
+      left: directionalLight.shadow.camera.left,
+      right: directionalLight.shadow.camera.right,
+      top: directionalLight.shadow.camera.top,
+      bottom: directionalLight.shadow.camera.bottom,
+      bias: directionalLight.shadow.bias,
+      normalBias: directionalLight.shadow.normalBias,
+    };
+
+    // 📂 Crear folder de sombras en GUI
+    const shadowFolder = gui.addFolder("Shadow Settings");
+
+    // 🔳 Resolución del mapa de sombras (mapSize)
+    shadowFolder
+      .add(shadowParams, "mapSize", 512, 16384, 512)
+      .name("Map Size")
+      .onChange((value) => {
+        directionalLight.shadow.mapSize.width = value;
+        directionalLight.shadow.mapSize.height = value;
+        directionalLight.shadow.needsUpdate = true; // Necesario para aplicar cambios
+      });
+
+    // 🔷 Configuración del plano de recorte de sombras (near, far)
+    shadowFolder
+      .add(shadowParams, "near", 0.1, 10, 0.1)
+      .name("Shadow Near")
+      .onChange((value) => {
+        directionalLight.shadow.camera.near = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    shadowFolder
+      .add(shadowParams, "far", 10, 500, 1)
+      .name("Shadow Far")
+      .onChange((value) => {
+        directionalLight.shadow.camera.far = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    // 🔳 Área de proyección de sombra (left, right, top, bottom)
+    shadowFolder
+      .add(shadowParams, "left", -50, 0, 1)
+      .name("Shadow Left")
+      .onChange((value) => {
+        directionalLight.shadow.camera.left = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    shadowFolder
+      .add(shadowParams, "right", 0, 50, 1)
+      .name("Shadow Right")
+      .onChange((value) => {
+        directionalLight.shadow.camera.right = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    shadowFolder
+      .add(shadowParams, "top", 0, 50, 1)
+      .name("Shadow Top")
+      .onChange((value) => {
+        directionalLight.shadow.camera.top = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    shadowFolder
+      .add(shadowParams, "bottom", -50, 0, 1)
+      .name("Shadow Bottom")
+      .onChange((value) => {
+        directionalLight.shadow.camera.bottom = value;
+        directionalLight.shadow.camera.updateProjectionMatrix();
+      });
+
+    // 🔍 Ajustes de Bias para mejorar sombras
+    shadowFolder
+      .add(shadowParams, "bias", -0.01, 0.01, 0.0001)
+      .name("Shadow Bias")
+      .onChange((value) => {
+        directionalLight.shadow.bias = value;
+      });
+
+    shadowFolder
+      .add(shadowParams, "normalBias", 0, 0.01, 0.0001)
+      .name("Normal Bias")
+      .onChange((value) => {
+        directionalLight.shadow.normalBias = value;
+      });
 
     // Control de la intensidad
     dirLightFolder
@@ -219,88 +337,55 @@ const Visor = () => {
         directionalLight.position.z = value; // Actualizar la posición en el eje Z
       });
 
-    const spotLights = [];
-    const spotLightParams = [];
+    const dirLightTargetPosition = {
+      x: directionalLight.target.position.x,
+      y: directionalLight.target.position.y,
+      z: directionalLight.target.position.z,
+    };
 
-    for (let i = 0; i < 5; i++) {
-      const spotLight = new THREE.SpotLight(0xffffff, 1);
-      spotLight.position.set((i - 2) * 5, 10, 5); // Posiciones iniciales
-      spotLight.castShadow = true;
-      spotLight.angle = Math.PI / 6; // Ángulo del cono
-      spotLight.penumbra = 0.5; // Suavidad en los bordes
-      scene.add(spotLight);
+    const targetFolder = gui.addFolder("Light Target");
 
-      // Añadimos la luz al array
-      spotLights.push(spotLight);
-
-      // Creamos parámetros iniciales para cada luz
-      spotLightParams.push({
-        color: spotLight.color.getHex(),
-        intensity: spotLight.intensity,
-        x: spotLight.position.x,
-        y: spotLight.position.y,
-        z: spotLight.position.z,
+    targetFolder
+      .add(dirLightTargetPosition, "x", -100, 100, 0.1)
+      .name("Target X")
+      .onChange((value) => {
+        directionalLight.target.position.x = value;
+        directionalLight.target.updateMatrixWorld(); // Importante: Actualiza el target en el mundo
       });
 
-      // Crear una carpeta para cada SpotLight en dat.gui
-      const folder = gui.addFolder(`SpotLight ${i + 1}`);
+    targetFolder
+      .add(dirLightTargetPosition, "y", -100, 100, 0.1)
+      .name("Target Y")
+      .onChange((value) => {
+        directionalLight.target.position.y = value;
+        directionalLight.target.updateMatrixWorld();
+      });
 
-      // Control de color
-      folder
-        .addColor(spotLightParams[i], "color")
-        .name("Color")
-        .onChange((value) => {
-          spotLight.color.setHex(value);
-        });
-
-      // Control de intensidad
-      folder
-        .add(spotLightParams[i], "intensity", 0, 10, 0.1)
-        .name("Intensity")
-        .onChange((value) => {
-          spotLight.intensity = value;
-        });
-
-      // Controles de posición
-      folder
-        .add(spotLightParams[i], "x", -20, 20, 0.1)
-        .name("Position X")
-        .onChange((value) => {
-          spotLight.position.x = value;
-        });
-
-      folder
-        .add(spotLightParams[i], "y", 0, 20, 0.1)
-        .name("Position Y")
-        .onChange((value) => {
-          spotLight.position.y = value;
-        });
-
-      folder
-        .add(spotLightParams[i], "z", -20, 20, 0.1)
-        .name("Position Z")
-        .onChange((value) => {
-          spotLight.position.z = value;
-        });
-    }
+    targetFolder
+      .add(dirLightTargetPosition, "z", -100, 100, 0.1)
+      .name("Target Z")
+      .onChange((value) => {
+        directionalLight.target.position.z = value;
+        directionalLight.target.updateMatrixWorld();
+      });
 
     let meshList = [];
     loader.load(
       modelUrl,
       (glb) => {
         const model = glb.scene;
+        storeOriginalMaterials(model);
+        modelRef.current = model;
         model.traverse((node) => {
           if (node.isMesh) {
-            node.material.metalness = 0.5;
-            node.material.roughness = 0.8;
+            node.material.metalness = 0.3;
+            node.material.roughness = 0.4;
             node.material.side = THREE.DoubleSide;
             node.castShadow = true;
             node.receiveShadow = true;
 
             const match = node.name.match(/<(\d{7})/);
-
             const number = match && match[1];
-
             meshList.push(number);
             node.geometry.computeVertexNormals();
           }
@@ -310,9 +395,7 @@ const Visor = () => {
           setMeshes(meshList);
         }
         boxHelperRef.current = new THREE.Box3().setFromObject(model);
-      },
-      (xhr) => {
-        console.log("Modelo cargado");
+        console.log("Modelo cargado completamente");
       },
       (error) => {
         console.error("Error cargando el modelo:", error);
@@ -320,14 +403,20 @@ const Visor = () => {
     );
 
     const composer = new EffectComposer(renderer);
+    composerRef.current = composer;
     composer.addPass(new RenderPass(scene, camera));
     const n8aopass = new N8AOPass(scene, camera, width, height);
+    n8aopassRef.current = n8aopass;
     composer.addPass(n8aopass);
+
     n8aopass.configuration.gammaCorrection = false;
-    n8aopass.configuration.aoRadius = 5.0;
-    n8aopass.configuration.distanceFalloff = 1.0;
-    n8aopass.configuration.intensity = 5.0;
+    n8aopass.configuration.aoRadius = 4;
+    n8aopass.configuration.distanceFalloff = 2;
+    n8aopass.configuration.intensity = 3;
     n8aopass.configuration.color = new THREE.Color(0, 0, 0);
+    n8aopass.configuration.aoSamples = 32;
+    n8aopass.configuration.denoiseSamples = 8;
+    n8aopass.configuration.denoiseRadius = 12;
 
     n8aopass.setQualityMode("high");
 
@@ -349,14 +438,23 @@ const Visor = () => {
 
     const nnfolder = gui.addFolder(`AAO`);
     nnfolder
-      .add(n8aopass.configuration, "aoRadius", 0.1, 10, 0.1)
+      .add(n8aopass.configuration, "aoRadius", 0.01, 3, 0.01)
       .name("AO Radius");
     nnfolder
-      .add(n8aopass.configuration, "distanceFalloff", 0.1, 5, 0.1) // Rango de 0.1 a 5 con pasos de 0.1
+      .add(n8aopass.configuration, "distanceFalloff", 0.01, 5, 0.01) // Rango de 0.1 a 5 con pasos de 0.1
       .name("Distance Falloff");
     nnfolder
-      .add(n8aopass.configuration, "intensity", 0, 10, 0.1) // Rango de 0 a 10 con pasos de 0.1
+      .add(n8aopass.configuration, "intensity", 0, 2, 0.01) // Rango de 0 a 10 con pasos de 0.1
       .name("Intensity");
+    nnfolder
+      .add(n8aopass.configuration, "aoSamples", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
+      .name("AO Samples");
+    nnfolder
+      .add(n8aopass.configuration, "denoiseSamples", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
+      .name("Denoise Samples");
+    nnfolder
+      .add(n8aopass.configuration, "denoiseRadius", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
+      .name("Denoise Radius");
 
     // Función de animación
     const animate = () => {
@@ -371,24 +469,100 @@ const Visor = () => {
 
     animate();
 
-    window.addEventListener("resize", () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      composer.setSize(window.innerWidth, window.innerHeight);
-      camera.aspect = window.innerWidth / window.innerHeight;
+    const handleResize = () => {
+      const width = visorRef.current.clientWidth;
+      const height = visorRef.current.clientHeight;
+      camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+      composer.setSize(width, height);
+    };
+
+    window.addEventListener("resize", () => {
+      handleResize();
     });
 
     // Limpieza
     return () => {
       window.removeEventListener("resize", handleResize);
-      if (visorRef.current) {
-        visorRef.current.removeChild(renderer.domElement);
+
+      // Limpieza de controles
+      if (controlsRef.current) {
+        controlsRef.current.dispose();
       }
+
+      if (transformControlsRef.current) {
+        transformControlsRef.current.dispose();
+      }
+
+      // Limpieza del renderTarget si existe
+      if (renderTarget) {
+        renderTarget.dispose();
+        renderTarget.depthTexture.dispose();
+      }
+
+      // Limpieza de luces
+      scene.traverse((object) => {
+        if (object.isLight) {
+          object.dispose();
+        }
+      });
+
+      // Limpieza del modelo y materiales
+      if (modelRef.current) {
+        disposeModel();
+      }
+
+      // Limpieza de passes y composer
+      if (n8aopassRef.current) {
+        n8aopassRef.current.dispose();
+      }
+
+      if (composerRef.current) {
+        composerRef.current.dispose();
+      }
+
+      // Limpieza del renderer
       if (rendererRef.current) {
         rendererRef.current.dispose();
+        if (visorRef.current) {
+          visorRef.current.removeChild(rendererRef.current.domElement);
+        }
+      }
+
+      // Limpiar la escena
+      while (scene.children.length > 0) {
+        scene.remove(scene.children[0]);
+      }
+
+      // Cancelar el loop de animación
+      if (window.requestAnimationFrameId) {
+        cancelAnimationFrame(window.requestAnimationFrameId);
       }
     };
   }, []);
+
+  function disposeModel() {
+    const model = modelRef.current;
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.geometry.dispose();
+        if (node.material.isMaterial) {
+          cleanMaterial(node.material);
+        } else if (Array.isArray(node.material)) {
+          node.material.forEach(cleanMaterial);
+        }
+      }
+    });
+  }
+
+  function cleanMaterial(material) {
+    Object.keys(material).forEach((key) => {
+      if (material[key] && typeof material[key].dispose === "function") {
+        material[key].dispose();
+      }
+    });
+  }
 
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -541,6 +715,38 @@ const Visor = () => {
     });
   };
 
+  function storeOriginalMaterials(model) {
+    model.traverse((node) => {
+      if (node.isMesh) {
+        // Guardas el material original asociado al uuid (o id) del node
+        originalMaterialsRef.current[node.uuid] = node.material;
+      }
+    });
+  }
+
+  function selectMesh(meshId) {
+    const model = modelRef.current;
+    if (!model) return;
+    // 1) Restaura los materiales originales de todos los meshes
+    model.traverse((node) => {
+      if (node.isMesh && originalMaterialsRef.current[node.uuid]) {
+        node.material = originalMaterialsRef.current[node.uuid];
+      }
+    });
+    // 2) Aplica el material transparente a todos excepto al que tenga el ID seleccionado
+    model.traverse((node) => {
+      if (node.isMesh) {
+        const match = node.name.match(/<(\d{7})/);
+        const number = match && match[1];
+        if (number !== meshId) {
+          node.material = darkerTransparentGrayMaterial;
+          node.castShadow = false;
+          node.receiveShadow = false;
+        }
+      }
+    });
+  }
+
   const removePlane = () => {
     const scene = sceneRef.current;
     const renderer = rendererRef.current;
@@ -679,7 +885,7 @@ const Visor = () => {
           )}
         </div>
       </nav>
-      {meshes && (
+      {meshes && meshes.length > 0 && (
         <section
           style={{
             display: "flex",
@@ -696,13 +902,52 @@ const Visor = () => {
             color: "#3D3C3B",
           }}
         >
-          <p>Meshes in the model</p>
+          <p
+            style={{
+              margin: 0,
+            }}
+          >
+            Meshes in the model
+          </p>
           <div style={{ overflowY: "auto", maxHeight: "200px" }}>
-            {meshes.map((mesh, index) => (
-              <p style={{ margin: 0, fontSize: "10px" }} key={index}>
-                {mesh}
-              </p>
-            ))}
+            <div
+              style={{
+                width: "100%",
+                display: "flex",
+                gap: "5px",
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: "5px",
+              }}
+            >
+              <input
+                style={{
+                  padding: "2px",
+                  borderRadius: "5px",
+                  color: "black",
+                  border: "1px solid #3D3C3B",
+                  boxSizing: "border-box",
+                  backgroundColor: "#f9f9f9",
+                }}
+                type="text"
+                value={searcher}
+                onChange={(e) => setSearcher(e.target.value)}
+              />
+              <Button onClick={() => selectMesh(searcher)}>+</Button>
+            </div>
+            {meshes.map((mesh, index) => {
+              if (mesh === "") return;
+              else
+                return (
+                  <button
+                    style={{ margin: 0, fontSize: "10px" }}
+                    key={index}
+                    onClick={() => selectMesh(mesh)}
+                  >
+                    {mesh}
+                  </button>
+                );
+            })}
           </div>
         </section>
       )}
