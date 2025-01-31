@@ -152,11 +152,14 @@ const Visor = () => {
     directionalLight.shadow.bias = -0.0002;
     directionalLight.shadow.normalBias = 0.001;
 
+    directionalLight.target.position.set(0, 0, 0);
+
     scene.add(directionalLight);
 
     const cameraFolder = gui.addFolder("Camera");
     // agregar fov
     cameraFolder.add(camera, "fov", 1, 180, 1).name("FOV");
+    cameraFolder.add(camera, "focus", 0, 100, 0.1).name("Focus");
 
     const bgparams = {
       backgroundColor: `#${scene.background.getHexString()}`,
@@ -418,23 +421,7 @@ const Visor = () => {
     n8aopass.configuration.denoiseSamples = 8;
     n8aopass.configuration.denoiseRadius = 12;
 
-    n8aopass.setQualityMode("high");
-
-    const renderTarget = new THREE.WebGLRenderTarget(width, height);
-    // If you just want a depth buffer
-    renderTarget.depthTexture = new THREE.DepthTexture(
-      width,
-      height,
-      THREE.UnsignedIntType
-    );
-    renderTarget.depthTexture.format = THREE.DepthFormat;
-    // If you want a depth buffer and a stencil buffer
-    renderTarget.depthTexture = new THREE.DepthTexture(
-      width,
-      height,
-      THREE.UnsignedInt248Type
-    );
-    renderTarget.depthTexture.format = THREE.DepthStencilFormat;
+    n8aopass.setQualityMode("low");
 
     const nnfolder = gui.addFolder(`AAO`);
     nnfolder
@@ -724,6 +711,41 @@ const Visor = () => {
     });
   }
 
+  function selectMeshes(meshIdsString) {
+    // 1) Convertir el string de IDs a un array, eliminando espacios
+    const meshIdsArray = meshIdsString
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    const model = modelRef.current;
+    if (!model) return;
+
+    // 2) Restaura los materiales originales de todos los meshes
+    model.traverse((node) => {
+      if (node.isMesh && originalMaterialsRef.current[node.uuid]) {
+        node.material = originalMaterialsRef.current[node.uuid];
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+
+    // 3) Aplica el material transparente a los que no estén en meshIdsArray
+    model.traverse((node) => {
+      if (node.isMesh) {
+        const match = node.name.match(/<(\d{7})/);
+        const number = match && match[1];
+
+        // Si el 'number' no está en el array, aplicamos material semitransparente
+        if (!meshIdsArray.includes(number)) {
+          node.material = darkerTransparentGrayMaterial;
+          node.castShadow = false;
+          node.receiveShadow = false;
+        }
+      }
+    });
+  }
+
   function selectMesh(meshId) {
     const model = modelRef.current;
     if (!model) return;
@@ -933,7 +955,7 @@ const Visor = () => {
                 value={searcher}
                 onChange={(e) => setSearcher(e.target.value)}
               />
-              <Button onClick={() => selectMesh(searcher)}>+</Button>
+              <Button onClick={() => selectMeshes(searcher)}>+</Button>
             </div>
             {meshes.map((mesh, index) => {
               if (mesh === "") return;
