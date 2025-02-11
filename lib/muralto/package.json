@@ -1,6 +1,6 @@
 {
   "name": "@madpug2022/muralto",
-  "version": "0.1.7",
+  "version": "0.2.2",
   "main": "dist/muralto.cjs.js",
   "module": "dist/muralto.es.js",
   "exports": {
@@ -23,6 +23,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-icons": "^5.4.0",
+    "three-mesh-bvh": "^0.9.0",
     "n8ao": "^1.9.4"
   },
   "dependencies": {

@@ -1,101 +1,158 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, use, useCallback } from "react";
 import * as THREE from "three";
 // Importa los loaders y controles que necesitas
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import * as dat from "dat.gui";
-// Importa el compositor y los passes
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass";
 import { CiMaximize2 } from "react-icons/ci";
 import { PiBoundingBox } from "react-icons/pi";
 import { MdOutlineCameraIndoor } from "react-icons/md";
 
 import { gsap } from "gsap";
-import modelUrl from "../../assets/Muralto/model.glb";
-
 import Button from "../ui/Button";
 import Helper from "../ui/Helper";
 import MenuButton from "../ui/MenuButton";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import {
+  MeshBVH,
+  computeBoundsTree,
+  disposeBoundsTree,
+  computeBatchedBoundsTree,
+  disposeBatchedBoundsTree,
+  acceleratedRaycast,
+} from "three-mesh-bvh";
 import { N8AOPass } from "n8ao";
-import { DRACOLoader } from "three/examples/jsm/Addons.js";
+import modelUrl from "../../assets/Muralto/model.glb";
+import roomsUrl from "../../assets/Muralto/rooms.glb";
+import dataUrl from "../../assets/Muralto/props.json?url";
+import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 
-const Visor = () => {
+function extractOODDirectShapeIds(rooms) {
+  const oodDirectShapeIds = [];
+
+  for (const key in rooms) {
+    if (rooms.hasOwnProperty(key)) {
+      const room = rooms[key];
+
+      if (
+        typeof room === "object" &&
+        room !== null &&
+        room.hasOwnProperty("_OOD_DirectShapeId")
+      ) {
+        oodDirectShapeIds.push(room._OOD_DirectShapeId.toString());
+      }
+    }
+  }
+
+  return oodDirectShapeIds;
+}
+
+const Visor = ({ externalIds, testMode = false }) => {
   const [showCameraControls, setShowCameraControls] = useState(false);
-  const [searcher, setSearcher] = useState("");
   const [cuttingActive, setCuttingActive] = useState(false);
-  const [meshes, setMeshes] = useState([]);
   const visorRef = useRef();
   const cameraRef = useRef();
   const controlsRef = useRef();
   const rendererRef = useRef();
   const sceneRef = useRef();
   const boxHelperRef = useRef(null);
-  const raycasterRef = useRef(new THREE.Raycaster());
+  const raycasterRef = useRef(null);
   const clippingPlaneRef = useRef(null);
   const planeMeshRef = useRef(null);
   const transformControlsRef = useRef(null);
   const modelRef = useRef(null);
+  const roomsModelRef = useRef(null);
   const composerRef = useRef(null);
-  const n8aopassRef = useRef(null);
   const originalMaterialsRef = useRef({});
+  const roomsOriginalMaterialsRef = useRef({});
+  const roomsRef = useRef([]);
+  const n8aopassRef = useRef(null);
+  const isHoverActive = useRef(false);
+  const animationFrameId = useRef(null);
+  const [jsonData, setJson] = useState(null);
+
+  const cargarJSON = useCallback(async () => {
+    try {
+      const respuesta = await fetch(dataUrl);
+      if (!respuesta.ok) {
+        throw new Error(
+          `Error al obtener el archivo JSON: ${respuesta.status}`
+        );
+      }
+      const datos = await respuesta.json();
+      setJson(datos);
+      roomsRef.current = extractOODDirectShapeIds(datos.rooms);
+      return datos;
+    } catch (error) {
+      console.error("Hubo un problema al cargar el JSON:", error);
+      throw error;
+    }
+  }, [dataUrl]);
 
   const darkerTransparentGrayMaterial = new THREE.MeshStandardMaterial({
     color: 0xd3d3d3,
     transparent: true,
-    roughness: 0.2,
-    opacity: 0.07,
-    metalness: 0.08,
+    opacity: 0.05,
+    roughness: 0.1,
+    metalness: 0.06,
     depthWrite: false,
   });
 
   // Cargar modelo GLB
   const loader = new GLTFLoader();
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(
-    "https://www.gstatic.com/draco/versioned/decoders/1.5.7/"
-  );
-  dracoLoader.setDecoderConfig({ type: "js" });
-  loader.setDRACOLoader(dracoLoader);
+  const roomLoader = new GLTFLoader();
+
+  loader.setMeshoptDecoder(MeshoptDecoder);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     // Configuración básica
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+    });
+
+    function render() {
+      renderer.render(scene, camera);
+    }
     const width = visorRef.current.clientWidth;
     const height = visorRef.current.clientHeight;
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(width, height);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.SRGBColorSpace;
+    renderer.localClippingEnabled = true;
+    renderer.toneMappingExposure = 1.2;
+    rendererRef.current = renderer;
+    visorRef.current.appendChild(renderer.domElement);
 
+    THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+    THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+    THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+    THREE.BatchedMesh.prototype.computeBoundsTree = computeBatchedBoundsTree;
+    THREE.BatchedMesh.prototype.disposeBoundsTree = disposeBatchedBoundsTree;
+    THREE.BatchedMesh.prototype.raycast = acceleratedRaycast;
+
+    if (dataUrl) {
+      cargarJSON();
+    }
     // Crear escena, cámara y renderer
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xdae7f2);
-    const gui = new dat.GUI();
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
     camera.position.set(-17, 26, 16);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: true,
-      preserveDrawingBuffer: true,
-      stencil: true,
-    });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(width, height);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputEncoding = THREE.sRGBEncoding;
-    renderer.localClippingEnabled = true;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.physicallyCorrectLights = true;
-
-    visorRef.current.appendChild(renderer.domElement);
-    rendererRef.current = renderer;
-
-    function render() {
-      renderer.render(scene, camera);
-    }
     // Controles de cámara
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.dampingFactor = 0.2;
@@ -112,357 +169,437 @@ const Visor = () => {
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     scene.add(ambientLight);
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.5);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.2);
     scene.add(hemiLight);
 
     const directionalLight = new THREE.DirectionalLight();
     // Ajustes de la luz direccional
     directionalLight.color.setHex(0xffffff);
-    directionalLight.intensity = 4;
+    directionalLight.intensity = 2.5;
     directionalLight.castShadow = true;
 
-    // Elevation y azimuth en radianes
-    const elevation = 1.5;
-    const azimuth = 0.75;
+    directionalLight.position.set(50, 100, 50);
 
-    // Para posicionar la luz usando coordenadas esféricas
-    // Radio “r” puede ser la distancia que quieras
-    const r = 50;
-    const x = r * Math.sin(elevation) * Math.cos(azimuth);
-    const y = r * Math.cos(elevation);
-    const z = r * Math.sin(elevation) * Math.sin(azimuth);
-
-    directionalLight.position.set(x, y, z);
-
-    // Ajusta el radio de sombra a 0 para sombras más definidas
-    directionalLight.shadow.radius = 0;
-
-    const helper = new THREE.DirectionalLightHelper(directionalLight, 5);
-    scene.add(helper);
-
-    // Configura el resto de parámetros de sombra que consideres necesarios
-    directionalLight.shadow.mapSize.width = 4096 * 2;
-    directionalLight.shadow.mapSize.height = 4096 * 2;
-    directionalLight.shadow.camera.near = 0.1;
-    directionalLight.shadow.camera.far = 100;
-    directionalLight.shadow.camera.left = -15;
-    directionalLight.shadow.camera.right = 15;
-    directionalLight.shadow.camera.top = 15;
-    directionalLight.shadow.camera.bottom = -15;
-    directionalLight.shadow.bias = -0.0002;
+    directionalLight.shadow.mapSize.set(4096 * 2, 4096 * 2);
+    // Asegúrate de que el 'near' y 'far' sean adecuados al tamaño de tu escena
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 200;
+    directionalLight.shadow.camera.left = -50;
+    directionalLight.shadow.camera.right = 50;
+    directionalLight.shadow.camera.top = 50;
+    directionalLight.shadow.camera.bottom = -50;
+    // Un bias pequeño ayuda a evitar "bandas" en sombras
+    directionalLight.shadow.bias = -0.0001;
     directionalLight.shadow.normalBias = 0.001;
-
-    directionalLight.target.position.set(0, 0, 0);
 
     scene.add(directionalLight);
 
-    const cameraFolder = gui.addFolder("Camera");
-    // agregar fov
-    cameraFolder.add(camera, "fov", 1, 180, 1).name("FOV");
-    cameraFolder.add(camera, "focus", 0, 100, 0.1).name("Focus");
+    scene.fog = new THREE.Fog(0x949494, 1000, 3000);
+    for (let l = 0; l < 4; l++) {
+      const dirLight = new THREE.DirectionalLight(0xffffff, Math.PI / 2);
+      dirLight.name = "Dir. Light " + l;
+      dirLight.position.set(200, 200, 200);
+      dirLight.castShadow = true;
+      dirLight.shadow.camera.near = 100;
+      dirLight.shadow.camera.far = 5000;
+      dirLight.shadow.camera.right = 150;
+      dirLight.shadow.camera.left = -150;
+      dirLight.shadow.camera.top = 150;
+      dirLight.shadow.camera.bottom = -150;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
+      dirLight.shadow.bias = -0.001;
+      scene.add(dirLight);
+    }
 
-    const bgparams = {
-      backgroundColor: `#${scene.background.getHexString()}`,
-    };
+    const groundMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(600, 600),
+      new THREE.MeshPhongMaterial({ color: 0xdae7f2, depthWrite: true })
+    );
+    groundMesh.position.y = -1;
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.name = "Ground Mesh";
+    groundMesh.receiveShadow = true;
+    scene.add(groundMesh);
 
-    gui.addColor(bgparams, "backgroundColor").onChange((value) => {
-      scene.background.set(value);
-    });
-    const ambientFolder = gui.addFolder("Ambient Light");
-    ambientFolder.add(ambientLight, "intensity", 0, 10, 0.1).name("Intensity");
-    const params = {
-      color: ambientLight.color.getHex(),
-    };
-    ambientFolder
-      .addColor(params, "color")
-      .name("Color")
-      .onChange((value) => {
-        // value llega en formato 0xRRGGBB
-        ambientLight.color.setHex(value);
-      });
-    const hemiLightFolder = gui.addFolder("Hemisphere Light");
-    hemiLightFolder.add(hemiLight, "intensity", 0, 10, 0.1).name("Intensity");
+    const composer = new EffectComposer(renderer);
+    composerRef.current = composer;
 
-    // Control del color del cielo
-    const hemiLightParams = {
-      skyColor: hemiLight.color.getHex(), // Color del cielo inicial
-      groundColor: hemiLight.groundColor.getHex(), // Color del suelo inicial
-    };
+    const n8aopass = new N8AOPass(scene, camera, width, height);
+    n8aopassRef.current = n8aopass;
+    const renderPasse = new RenderPass(scene, camera);
+    const outputPass = new OutputPass();
 
-    hemiLightFolder
-      .addColor(hemiLightParams, "skyColor")
-      .name("Sky Color")
-      .onChange((value) => {
-        hemiLight.color.setHex(value); // Actualizar el color del cielo
-      });
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      0.1,
+      0.05,
+      0.1
+    );
 
-    hemiLightFolder
-      .addColor(hemiLightParams, "groundColor")
-      .name("Ground Color")
-      .onChange((value) => {
-        hemiLight.groundColor.setHex(value); // Actualizar el color del suelo
-      });
-    // Crear una carpeta para los controles de la luz direccional
-    const dirLightFolder = gui.addFolder("Directional Light");
+    const outlinePass = new OutlinePass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      scene,
+      camera
+    );
 
-    const shadowParams = {
-      mapSize: 8192, // Valor inicial basado en 4096 * 2
-      near: directionalLight.shadow.camera.near,
-      far: directionalLight.shadow.camera.far,
-      left: directionalLight.shadow.camera.left,
-      right: directionalLight.shadow.camera.right,
-      top: directionalLight.shadow.camera.top,
-      bottom: directionalLight.shadow.camera.bottom,
-      bias: directionalLight.shadow.bias,
-      normalBias: directionalLight.shadow.normalBias,
-    };
+    outlinePass.edgeStrength = 10;
+    outlinePass.edgeGlow = 0;
+    outlinePass.edgeThickness = 4;
+    outlinePass.visibleEdgeColor.set("#0055ff");
+    outlinePass.hiddenEdgeColor.set("#0055ff");
 
-    // 📂 Crear folder de sombras en GUI
-    const shadowFolder = gui.addFolder("Shadow Settings");
+    n8aopass.configuration.aoRadius = 14;
+    n8aopass.configuration.distanceFalloff = 2;
+    n8aopass.configuration.intensity = 4;
+    n8aopass.configuration.color = new THREE.Color(0, 0, 0);
+    n8aopass.configuration.screenSpaceRadius = true;
 
-    // 🔳 Resolución del mapa de sombras (mapSize)
-    shadowFolder
-      .add(shadowParams, "mapSize", 512, 16384, 512)
-      .name("Map Size")
-      .onChange((value) => {
-        directionalLight.shadow.mapSize.width = value;
-        directionalLight.shadow.mapSize.height = value;
-        directionalLight.shadow.needsUpdate = true; // Necesario para aplicar cambios
-      });
+    n8aopass.configuration.accumulate = true;
+    n8aopass.configuration.stencil = true;
 
-    // 🔷 Configuración del plano de recorte de sombras (near, far)
-    shadowFolder
-      .add(shadowParams, "near", 0.1, 10, 0.1)
-      .name("Shadow Near")
-      .onChange((value) => {
-        directionalLight.shadow.camera.near = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    n8aopass.setQualityMode("Ultra");
 
-    shadowFolder
-      .add(shadowParams, "far", 10, 500, 1)
-      .name("Shadow Far")
-      .onChange((value) => {
-        directionalLight.shadow.camera.far = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    n8aopass.configuration.aoSamples = 16;
 
-    // 🔳 Área de proyección de sombra (left, right, top, bottom)
-    shadowFolder
-      .add(shadowParams, "left", -50, 0, 1)
-      .name("Shadow Left")
-      .onChange((value) => {
-        directionalLight.shadow.camera.left = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    THREE.ColorManagement.legacyMode = false;
 
-    shadowFolder
-      .add(shadowParams, "right", 0, 50, 1)
-      .name("Shadow Right")
-      .onChange((value) => {
-        directionalLight.shadow.camera.right = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
-    shadowFolder
-      .add(shadowParams, "top", 0, 50, 1)
-      .name("Shadow Top")
-      .onChange((value) => {
-        directionalLight.shadow.camera.top = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    composer.addPass(renderPasse); // RenderPass primero
+    composer.addPass(n8aopass); // N8AOPass después
+    composer.addPass(bloomPass); // BloomPass después
+    composer.addPass(outlinePass); // OutlinePass antes del OutputPass
+    composer.addPass(outputPass);
 
-    shadowFolder
-      .add(shadowParams, "bottom", -50, 0, 1)
-      .name("Shadow Bottom")
-      .onChange((value) => {
-        directionalLight.shadow.camera.bottom = value;
-        directionalLight.shadow.camera.updateProjectionMatrix();
-      });
+    //MOUSEOVER
 
-    // 🔍 Ajustes de Bias para mejorar sombras
-    shadowFolder
-      .add(shadowParams, "bias", -0.01, 0.01, 0.0001)
-      .name("Shadow Bias")
-      .onChange((value) => {
-        directionalLight.shadow.bias = value;
-      });
+    // Variables globales
+    const raycaster = new THREE.Raycaster();
+    raycasterRef.current = raycaster;
+    const mouse = new THREE.Vector2();
+    const hoverLabel = document.createElement("div");
+    let hoveredMesh = null;
 
-    shadowFolder
-      .add(shadowParams, "normalBias", 0, 0.01, 0.0001)
-      .name("Normal Bias")
-      .onChange((value) => {
-        directionalLight.shadow.normalBias = value;
-      });
+    // Configurar el cartel (hover label)
+    hoverLabel.style.position = "absolute";
+    hoverLabel.style.backgroundColor = "#ffffff";
+    hoverLabel.style.color = "black";
+    hoverLabel.style.boxShadow = "0 0 5px rgba(0,0,0,0.3)";
+    hoverLabel.style.padding = "5px 10px";
+    hoverLabel.style.borderRadius = "5px";
+    hoverLabel.style.display = "none";
+    document.body.appendChild(hoverLabel);
 
-    // Control de la intensidad
-    dirLightFolder
-      .add(directionalLight, "intensity", 0, 10, 0.1)
-      .name("Intensity");
+    function onMouseMove(event) {
+      // Convertir la posición del mouse a coordenadas normalizadas (-1 to 1)
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    }
 
-    // Control del color de la luz
-    const dirLightParams = {
-      color: directionalLight.color.getHex(), // Color inicial
-    };
-
-    dirLightFolder
-      .addColor(dirLightParams, "color")
-      .name("Color")
-      .onChange((value) => {
-        directionalLight.color.setHex(value); // Actualizar el color
-      });
-
-    // Control de la posición
-    const dirLightPosition = {
-      x: directionalLight.position.x,
-      y: directionalLight.position.y,
-      z: directionalLight.position.z,
-    };
-
-    dirLightFolder
-      .add(dirLightPosition, "x", -100, 100, 0.1)
-      .name("Position X")
-      .onChange((value) => {
-        directionalLight.position.x = value; // Actualizar la posición en el eje X
-      });
-
-    dirLightFolder
-      .add(dirLightPosition, "y", -100, 100, 0.1)
-      .name("Position Y")
-      .onChange((value) => {
-        directionalLight.position.y = value; // Actualizar la posición en el eje Y
-      });
-
-    dirLightFolder
-      .add(dirLightPosition, "z", -100, 100, 0.1)
-      .name("Position Z")
-      .onChange((value) => {
-        directionalLight.position.z = value; // Actualizar la posición en el eje Z
-      });
-
-    const dirLightTargetPosition = {
-      x: directionalLight.target.position.x,
-      y: directionalLight.target.position.y,
-      z: directionalLight.target.position.z,
-    };
-
-    const targetFolder = gui.addFolder("Light Target");
-
-    targetFolder
-      .add(dirLightTargetPosition, "x", -100, 100, 0.1)
-      .name("Target X")
-      .onChange((value) => {
-        directionalLight.target.position.x = value;
-        directionalLight.target.updateMatrixWorld(); // Importante: Actualiza el target en el mundo
-      });
-
-    targetFolder
-      .add(dirLightTargetPosition, "y", -100, 100, 0.1)
-      .name("Target Y")
-      .onChange((value) => {
-        directionalLight.target.position.y = value;
-        directionalLight.target.updateMatrixWorld();
-      });
-
-    targetFolder
-      .add(dirLightTargetPosition, "z", -100, 100, 0.1)
-      .name("Target Z")
-      .onChange((value) => {
-        directionalLight.target.position.z = value;
-        directionalLight.target.updateMatrixWorld();
-      });
+    // Agregar el listener para el movimiento del mouse
+    window.addEventListener("mousemove", onMouseMove);
 
     let meshList = [];
     loader.load(
       modelUrl,
       (glb) => {
         const model = glb.scene;
-        storeOriginalMaterials(model);
+        storeOriginalMaterials(model, originalMaterialsRef);
         modelRef.current = model;
         model.traverse((node) => {
           if (node.isMesh) {
-            node.material.metalness = 0.3;
-            node.material.roughness = 0.4;
-            node.material.side = THREE.DoubleSide;
+            node.frustumCulled = true;
             node.castShadow = true;
             node.receiveShadow = true;
 
-            const match = node.name.match(/<(\d{7})/);
-            const number = match && match[1];
-            meshList.push(number);
             node.geometry.computeVertexNormals();
           }
         });
         scene.add(model);
-        if (meshList.length !== meshes.length) {
-          setMeshes(meshList);
-        }
         boxHelperRef.current = new THREE.Box3().setFromObject(model);
-        console.log("Modelo cargado completamente");
       },
+      (progress) => {},
       (error) => {
+        // Éste sí es el onError real
         console.error("Error cargando el modelo:", error);
       }
     );
+    const roomMeshes = [];
+    const roomsIds = [];
+    let roomModel;
+    roomLoader.load(
+      roomsUrl,
+      (glb) => {
+        roomModel = glb.scene;
+        roomsModelRef.current = roomModel;
+        storeOriginalMaterials(roomModel, roomsOriginalMaterialsRef);
 
-    const composer = new EffectComposer(renderer);
-    composerRef.current = composer;
-    composer.addPass(new RenderPass(scene, camera));
-    const n8aopass = new N8AOPass(scene, camera, width, height);
-    n8aopassRef.current = n8aopass;
-    composer.addPass(n8aopass);
+        // Recorrer todos los nodos del modelo
+        roomModel.traverse((node) => {
+          if (node.isMesh) {
+            node.frustumCulled = true;
+            const match = node.name.match(/<(\d{7})/);
+            const number = match && match[1];
+            roomMeshes.push(node);
+            roomsIds.push(number);
+            meshList.push(node);
 
-    n8aopass.configuration.gammaCorrection = false;
-    n8aopass.configuration.aoRadius = 4;
-    n8aopass.configuration.distanceFalloff = 2;
-    n8aopass.configuration.intensity = 3;
-    n8aopass.configuration.color = new THREE.Color(0, 0, 0);
-    n8aopass.configuration.aoSamples = 32;
-    n8aopass.configuration.denoiseSamples = 8;
-    n8aopass.configuration.denoiseRadius = 12;
+            // Opcional: Configurar el BVH para la geometría original
+            node.geometry.boundsTree = new MeshBVH(node.geometry, {
+              maxDepth: 40,
+            });
+          }
+        });
 
-    n8aopass.setQualityMode("low");
+        // Configurar el outlinePass si existe
+        if (outlinePass) {
+          outlinePass.selectedObjects = meshList; // Seleccionar el modelo cargado
+        }
+      },
+      (progress) => {},
+      (error) => {
+        console.error("Error cargando el modelo de rooms:", error);
+      }
+    );
 
-    const nnfolder = gui.addFolder(`AAO`);
-    nnfolder
-      .add(n8aopass.configuration, "aoRadius", 0.01, 3, 0.01)
-      .name("AO Radius");
-    nnfolder
-      .add(n8aopass.configuration, "distanceFalloff", 0.01, 5, 0.01) // Rango de 0.1 a 5 con pasos de 0.1
-      .name("Distance Falloff");
-    nnfolder
-      .add(n8aopass.configuration, "intensity", 0, 2, 0.01) // Rango de 0 a 10 con pasos de 0.1
-      .name("Intensity");
-    nnfolder
-      .add(n8aopass.configuration, "aoSamples", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
-      .name("AO Samples");
-    nnfolder
-      .add(n8aopass.configuration, "denoiseSamples", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
-      .name("Denoise Samples");
-    nnfolder
-      .add(n8aopass.configuration, "denoiseRadius", 0, 64, 1) // Rango de 0 a 64 con pasos de 1
-      .name("Denoise Radius");
+    function updateRaycaster() {
+      if (!isHoverActive.current) return;
+      // Actualizar el raycaster con la posición del mouse
+      raycaster.setFromCamera(mouse, camera);
 
-    // Función de animación
-    const animate = () => {
-      requestAnimationFrame(animate);
+      // Verificar intersecciones solo con los meshes de roomModel
+      const intersects = raycaster.intersectObjects(roomMeshes, true);
+      if (intersects.length > 0) {
+        const firstIntersect = intersects[0].object;
+        const match = firstIntersect.name.match(/<(\d{7})/);
+        const number = match && match[1];
+        if (roomsIds.includes(number)) {
+          // Si el mesh intersectado es diferente al anterior, actualizar el cartel
+          if (hoveredMesh !== firstIntersect) {
+            hoveredMesh = firstIntersect;
+
+            // Mostrar el nombre del mesh en el cartel
+            hoverLabel.textContent = hoveredMesh.name || "Unnamed Mesh";
+            hoverLabel.style.display = "block";
+
+            // Posicionar el cartel cerca del cursor
+            const rect = renderer.domElement.getBoundingClientRect();
+            hoverLabel.style.left = `${
+              mouse.x * (rect.width / 2) + rect.width / 2 + rect.left + 10
+            }px`;
+            hoverLabel.style.top = `${
+              -mouse.y * (rect.height / 2) + rect.height / 2 + rect.top + 10
+            }px`;
+          }
+        } else {
+          // Si no hay intersecciones, ocultar el cartel
+          if (hoveredMesh !== null) {
+            hoveredMesh = null;
+            hoverLabel.style.display = "none";
+          }
+        }
+      }
+    }
+    const renderTarget = new THREE.WebGLRenderTarget(
+      Math.max(width, 1),
+      Math.max(height, 1)
+    );
+
+    // If you just want a depth buffer
+    renderTarget.depthTexture = new THREE.DepthTexture(
+      width,
+      height,
+      THREE.UnsignedIntType
+    );
+    renderTarget.depthTexture.format = THREE.DepthFormat;
+    // If you want a depth buffer and a stencil buffer
+    renderTarget.depthTexture = new THREE.DepthTexture(
+      width,
+      height,
+      THREE.UnsignedInt248Type
+    );
+    renderTarget.depthTexture.format = THREE.DepthStencilFormat;
+
+    // Variables para almacenar la posición y rotación anterior de la cámara
+    let previousCameraPosition = new THREE.Vector3();
+    let previousCameraRotation = new THREE.Euler();
+
+    // Variables para determinar si la cámara se está moviendo
+    let isCameraMoving = false;
+
+    // Variables para el valor actual de denoise y sus objetivos
+    let currentDenoiseSamples = 2;
+    let currentDenoiseRadius = 1;
+    let targetDenoiseSamples = 2;
+    let targetDenoiseRadius = 1;
+
+    // Función para detectar movimiento de cámara
+    function updateCameraMovement(camera) {
+      const positionThreshold = 0.01; // Umbral para detectar movimiento en la posición
+      const rotationThreshold = 0.01; // Umbral para detectar movimiento en la rotación
+
+      const positionDelta = camera.position.distanceTo(previousCameraPosition);
+      const rotationDelta =
+        Math.abs(camera.rotation.x - previousCameraRotation.x) +
+        Math.abs(camera.rotation.y - previousCameraRotation.y) +
+        Math.abs(camera.rotation.z - previousCameraRotation.z);
+
+      // Actualizamos la variable que indica si la cámara se está moviendo
+      isCameraMoving =
+        positionDelta > positionThreshold || rotationDelta > rotationThreshold;
+
+      // Guardamos la posición y rotación actual para el siguiente frame
+      previousCameraPosition.copy(camera.position);
+      previousCameraRotation.copy(camera.rotation);
+    }
+
+    // Función para definir los valores objetivo según si la cámara se mueve o no
+    function setN8AOTargetValues() {
+      if (isCameraMoving) {
+        targetDenoiseSamples = 8;
+        targetDenoiseRadius = 12;
+      } else {
+        targetDenoiseSamples = 2;
+        targetDenoiseRadius = 1;
+      }
+    }
+
+    // Función para ir interpolando progresivamente hacia esos valores objetivo
+    function updateN8AOParameters(n8aopass) {
+      // Factor de interpolación (ajusta este valor para cambiar la velocidad de transición)
+      const lerpFactor = 0.05;
+
+      // Interpolamos de forma lineal para que currentDenoiseSamples y currentDenoiseRadius
+      // se acerquen poco a poco a los valores deseados (target)
+      currentDenoiseSamples = THREE.MathUtils.lerp(
+        currentDenoiseSamples,
+        targetDenoiseSamples,
+        lerpFactor
+      );
+
+      currentDenoiseRadius = THREE.MathUtils.lerp(
+        currentDenoiseRadius,
+        targetDenoiseRadius,
+        lerpFactor
+      );
+
+      // Asignamos estos valores al pass
+      // Nota: si denoiseSamples requiere ser entero, podrías usar Math.round(...)
+      n8aopass.configuration.denoiseSamples = Math.round(currentDenoiseSamples);
+      n8aopass.configuration.denoiseRadius = Math.round(currentDenoiseRadius);
+    }
+
+    // Para calcular 'delta' (el tiempo transcurrido entre frames),
+    // en Three.js usualmente se hace algo así:
+    const clock = new THREE.Clock();
+
+    //Modo test con GUI
+
+    if (testMode) {
+      const gui = new GUI();
+      //Folder de luz ambiental
+      const ambientLightFolder = gui.addFolder("Ambient Light");
+      ambientLightFolder.add(ambientLight, "intensity", 0, 1, 0.01);
+
+      //Folder de luz direccional
+      const directionalLightFolder = gui.addFolder("Directional Light");
+      directionalLightFolder.add(directionalLight, "intensity", 0, 10, 0.01);
+      directionalLightFolder.add(
+        directionalLight.position,
+        "x",
+        -100,
+        100,
+        0.1
+      );
+      directionalLightFolder.add(
+        directionalLight.position,
+        "y",
+        -100,
+        100,
+        0.1
+      );
+      directionalLightFolder.add(
+        directionalLight.position,
+        "z",
+        -100,
+        100,
+        0.1
+      );
+
+      //Folder de luz hemisférica
+      const hemiLightFolder = gui.addFolder("Hemisphere Light");
+      hemiLightFolder.add(hemiLight, "intensity", 0, 1, 0.01);
+
+      //folder de otras luces
+      const otherLightsFolder = gui.addFolder("Other Lights");
+      for (let i = 0; i < 4; i++) {
+        const light = scene.getObjectByName(`Dir. Light ${i}`);
+        const lightFolder = otherLightsFolder.addFolder(`Dir. Light ${i}`);
+        lightFolder.add(light, "intensity", 0, 10, 0.01);
+        lightFolder.add(light.position, "x", -100, 100, 0.1);
+        lightFolder.add(light.position, "y", -100, 100, 0.1);
+        lightFolder.add(light.position, "z", -100, 100, 0.1);
+      }
+
+      //folder de bloom
+      const bloomFolder = gui.addFolder("Bloom Pass");
+      bloomFolder.add(bloomPass, "strength", 0, 5, 0.01);
+      bloomFolder.add(bloomPass, "radius", 0, 5, 0.01);
+      bloomFolder.add(bloomPass, "threshold", 0, 1, 0.01);
+
+      //folder de n8aopass
+      const n8aopassFolder = gui.addFolder("N8AO Pass");
+      n8aopassFolder.add(n8aopass.configuration, "aoSamples", 1, 64, 1);
+      n8aopassFolder.add(n8aopass.configuration, "aoRadius", 1, 64, 1);
+      n8aopassFolder.add(n8aopass.configuration, "intensity", 0, 10, 0.01);
+      n8aopassFolder.addColor(n8aopass.configuration, "color");
+      n8aopassFolder.add(
+        n8aopass.configuration,
+        "distanceFalloff",
+        0,
+        10,
+        0.01
+      );
+      n8aopassFolder.add(n8aopass.configuration, "screenSpaceRadius");
+    }
+
+    // Ciclo de animación
+    function animate() {
+      animationFrameId.current = requestAnimationFrame(animate);
+      updateRaycaster();
+      // Calculamos el tiempo transcurrido desde el frame anterior
+      const delta = clock.getDelta();
+
+      // Revisar movimiento de la cámara
+      updateCameraMovement(camera);
+
+      // Ajustar los valores objetivo de denoise/Radius
+      setN8AOTargetValues();
+
+      // Interpola y actualiza los parámetros del pass
+      updateN8AOParameters(n8aopass, delta);
 
       // Actualiza controles
       controls.update();
 
-      // Renderiza la escena con composer en vez de renderer directamente
+      // Renderiza la escena
       composer.render();
-    };
+    }
 
-    animate();
+    if (typeof window !== "undefined") {
+      animate();
+    }
 
     const handleResize = () => {
-      const width = visorRef.current.clientWidth;
-      const height = visorRef.current.clientHeight;
+      const width = Math.max(visorRef.current.clientWidth, 1); // Mínimo 1px
+      const height = Math.max(visorRef.current.clientHeight, 1); // Mínimo 1px
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+      renderTarget.setSize(width, height);
       composer.setSize(width, height);
+      n8aopass.setSize(width, height);
     };
 
     window.addEventListener("resize", () => {
@@ -473,6 +610,10 @@ const Visor = () => {
     return () => {
       window.removeEventListener("resize", handleResize);
 
+      if (animationFrameId.current) {
+        cancelAnimationFrame(animationFrameId.current);
+      }
+
       // Limpieza de controles
       if (controlsRef.current) {
         controlsRef.current.dispose();
@@ -480,6 +621,13 @@ const Visor = () => {
 
       if (transformControlsRef.current) {
         transformControlsRef.current.dispose();
+      }
+
+      if (renderer) {
+        renderer.dispose();
+        if (visorRef.current) {
+          visorRef.current.removeChild(renderer.domElement);
+        }
       }
 
       // Limpieza del renderTarget si existe
@@ -495,26 +643,16 @@ const Visor = () => {
         }
       });
 
+      // limpia el raycaster
+      window.removeEventListener("mousemove", onMouseMove);
+
       // Limpieza del modelo y materiales
       if (modelRef.current) {
         disposeModel();
       }
 
-      // Limpieza de passes y composer
-      if (n8aopassRef.current) {
-        n8aopassRef.current.dispose();
-      }
-
       if (composerRef.current) {
         composerRef.current.dispose();
-      }
-
-      // Limpieza del renderer
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-        if (visorRef.current) {
-          visorRef.current.removeChild(rendererRef.current.domElement);
-        }
       }
 
       // Limpiar la escena
@@ -569,7 +707,7 @@ const Visor = () => {
   /**
    * Función para crear un plano de corte
    */
-  const createplane = (event) => {
+  const createplane = useCallback((event) => {
     const renderer = rendererRef.current;
     const camera = cameraRef.current;
     const scene = sceneRef.current;
@@ -641,40 +779,27 @@ const Visor = () => {
 
     updatePlaneFromMesh();
 
-    // 5. Asignar el clipping plane al renderer (o a tus materiales)
     renderer.clippingPlanes = [plane];
 
-    // 6. Conectar el planeMesh al TransformControls para poder arrastrarlo
     transformControls.attach(planeMesh);
-    // OJO: El arrastre se hace sobre las flechas de colores que dibuja TransformControls,
-    //      NO sobre el AxesHelper.
 
-    // Cada vez que movamos/rotemos el planeMesh, actualizar la normal en clippingPlane
     transformControls.addEventListener("change", updatePlaneFromMesh);
-  };
+  }, []);
 
-  /**
-   * onPlaneTransform:
-   *   Recalcula la normal y la posición (coplanar point) del plane (THREE.Plane)
-   *   basados en la transform del planeMesh.
-   */
-  const updatePlaneFromMesh = () => {
+  function updatePlaneFromMesh() {
     const plane = clippingPlaneRef.current;
     const planeMesh = planeMeshRef.current;
     if (!plane || !planeMesh) return;
 
-    // Por defecto, la geometría del Plane "mira" +Z local
     const newNormal = new THREE.Vector3(0, 0, 1);
     planeMesh.getWorldDirection(newNormal);
 
-    // Punto en espacio mundo
     const coplanarPoint = new THREE.Vector3().setFromMatrixPosition(
       planeMesh.matrixWorld
     );
 
-    // Reconfigurar
     plane.setFromNormalAndCoplanarPoint(newNormal, coplanarPoint);
-  };
+  }
 
   const moveCamera = (newPos, time = 1) => {
     const camera = cameraRef.current;
@@ -702,69 +827,12 @@ const Visor = () => {
     });
   };
 
-  function storeOriginalMaterials(model) {
+  // Esta función la llamas una sola vez, quizá cuando cargaste el modelo
+  function storeOriginalMaterials(model, ref) {
     model.traverse((node) => {
       if (node.isMesh) {
         // Guardas el material original asociado al uuid (o id) del node
-        originalMaterialsRef.current[node.uuid] = node.material;
-      }
-    });
-  }
-
-  function selectMeshes(meshIdsString) {
-    // 1) Convertir el string de IDs a un array, eliminando espacios
-    const meshIdsArray = meshIdsString
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-
-    const model = modelRef.current;
-    if (!model) return;
-
-    // 2) Restaura los materiales originales de todos los meshes
-    model.traverse((node) => {
-      if (node.isMesh && originalMaterialsRef.current[node.uuid]) {
-        node.material = originalMaterialsRef.current[node.uuid];
-        node.castShadow = true;
-        node.receiveShadow = true;
-      }
-    });
-
-    // 3) Aplica el material transparente a los que no estén en meshIdsArray
-    model.traverse((node) => {
-      if (node.isMesh) {
-        const match = node.name.match(/<(\d{7})/);
-        const number = match && match[1];
-
-        // Si el 'number' no está en el array, aplicamos material semitransparente
-        if (!meshIdsArray.includes(number)) {
-          node.material = darkerTransparentGrayMaterial;
-          node.castShadow = false;
-          node.receiveShadow = false;
-        }
-      }
-    });
-  }
-
-  function selectMesh(meshId) {
-    const model = modelRef.current;
-    if (!model) return;
-    // 1) Restaura los materiales originales de todos los meshes
-    model.traverse((node) => {
-      if (node.isMesh && originalMaterialsRef.current[node.uuid]) {
-        node.material = originalMaterialsRef.current[node.uuid];
-      }
-    });
-    // 2) Aplica el material transparente a todos excepto al que tenga el ID seleccionado
-    model.traverse((node) => {
-      if (node.isMesh) {
-        const match = node.name.match(/<(\d{7})/);
-        const number = match && match[1];
-        if (number !== meshId) {
-          node.material = darkerTransparentGrayMaterial;
-          node.castShadow = false;
-          node.receiveShadow = false;
-        }
+        ref.current[node.uuid] = node.material;
       }
     });
   }
@@ -790,6 +858,177 @@ const Visor = () => {
     clippingPlaneRef.current = null;
   };
 
+  function restoreOriginalState() {
+    isHoverActive.current = false;
+    // Restaurar los materiales originales del modelo principal
+    modelRef.current.traverse((node) => {
+      if (node.isMesh && originalMaterialsRef.current[node.uuid]) {
+        node.material = originalMaterialsRef.current[node.uuid]; // Restaurar el material original
+        node.castShadow = true; // Restaurar sombras si es necesario
+        node.receiveShadow = true; // Restaurar sombras si es necesario
+      }
+    });
+
+    // Restaurar la visibilidad de todos los nodos del modelo de habitaciones
+    roomsModelRef.current.traverse((node) => {
+      if (node.isMesh) {
+        node.visible = true; // Asegurarse de que todos los nodos estén visibles
+      }
+    });
+
+    // Quitar el modelo de habitaciones de la escena si está presente
+    if (sceneRef.current.children.includes(roomsModelRef.current)) {
+      sceneRef.current.remove(roomsModelRef.current);
+    }
+
+    return moveCamera({ x: -17, y: 26, z: 16 });
+  }
+
+  function selectRoom(roomsData) {
+    // Si no hay datos, restaurar el estado original
+    if (roomsData.length === 0) return restoreOriginalState();
+    //isHoverActive.current = true;
+    // Verificar que todos los IDs existan
+    const allMeshIds = roomsData.flatMap((room) => room.directShapeIds);
+    const invalidIds = allMeshIds.filter(
+      (id) => !roomsRef.current.includes(id)
+    );
+    if (invalidIds.length > 0) {
+      return alert(`IDs no encontrados: ${invalidIds.join(", ")}`);
+    }
+
+    const n8aopass = n8aopassRef.current;
+    n8aopass.setQualityMode("Ultra");
+    // Transparentar todos los elementos del modelo original
+    modelRef.current.traverse((node) => {
+      if (node.isMesh) {
+        node.material = darkerTransparentGrayMaterial;
+        node.castShadow = false;
+        node.receiveShadow = false;
+      }
+    });
+
+    // Verificar si el modelo de rooms ya está cargado en la escena
+    const isModelAlreadyLoaded = sceneRef.current.children.includes(
+      roomsModelRef.current
+    );
+
+    // Si el modelo no está cargado, agregarlo a la escena
+    if (!isModelAlreadyLoaded) {
+      sceneRef.current.add(roomsModelRef.current);
+    }
+
+    // Restaurar la visibilidad de todos los nodos del modelo de rooms
+    roomsModelRef.current.traverse((node) => {
+      if (node.isMesh) {
+        node.visible = true; // Restaurar la visibilidad de todos los nodos
+      }
+    });
+
+    // Ocultar los elementos de room excepto los seleccionados y pintarlos según su status
+    const selectedPositions = []; // Para almacenar las posiciones de las habitaciones seleccionadas
+
+    roomsModelRef.current.traverse((node) => {
+      if (node.isMesh) {
+        const match = node.name.match(/<(\d{7})/);
+        const number = match && match[1];
+
+        if (number) {
+          // Buscar el roomData correspondiente al directShapeId
+          const roomData = roomsData.find((room) =>
+            room.directShapeIds.includes(number)
+          );
+
+          if (roomData) {
+            // Determinar el color según el status
+            let colorHex;
+            switch (roomData.status) {
+              case "Occupied":
+                colorHex = 0xff2323;
+                break;
+              case "Available":
+                colorHex = 0x1daf94;
+                break;
+              case "Warning":
+                colorHex = 0xe1901f;
+                break;
+              default:
+                colorHex = 0x90d5ff; // Color por defecto
+            }
+
+            // Crear el material con el color correspondiente
+            const coloredMaterial = new THREE.MeshBasicMaterial({
+              color: colorHex,
+            });
+
+            // Aplicar el material y hacer visible el nodo
+            node.material = coloredMaterial;
+            node.visible = true;
+
+            // Guardar la posición para calcular el centro
+            node.updateWorldMatrix(true, true);
+            const position = new THREE.Vector3();
+            position.setFromMatrixPosition(node.matrixWorld);
+            selectedPositions.push(position);
+          } else {
+            // Ocultar nodos que no coinciden con ningún directShapeId
+            node.visible = false;
+          }
+        }
+      }
+    });
+
+    // Calcular el centro de las habitaciones seleccionadas (si es necesario)
+    if (selectedPositions.length > 0) {
+      const center = selectedPositions
+        .reduce((acc, pos) => acc.add(pos), new THREE.Vector3())
+        .divideScalar(selectedPositions.length);
+      console.log("Centro de las habitaciones seleccionadas:", center);
+    }
+  }
+
+  function getDirectShapeIdsByExternalIds(inputArray) {
+    // Array para almacenar los resultados finales
+    const result = [];
+
+    // Recorrer el array de objetos de entrada
+    for (const item of inputArray) {
+      const { externalIds, status } = item;
+
+      // Array para almacenar los _OOD_DirectShapeId encontrados para este grupo de externalIds
+      const directShapeIds = [];
+
+      // Recorrer el objeto principal (jsonData.rooms)
+      for (const key in jsonData.rooms) {
+        if (jsonData.rooms.hasOwnProperty(key)) {
+          const room = jsonData.rooms[key];
+
+          // Verificar si el _OOD_ExternalId está en el array de externalIds
+          if (externalIds.includes(room._OOD_ExternalId)) {
+            // Agregar el _OOD_DirectShapeId al array de resultados
+            directShapeIds.push(room._OOD_DirectShapeId.toString());
+          }
+        }
+      }
+
+      // Agregar el objeto con los directShapeIds y el status al resultado final
+      result.push({
+        directShapeIds,
+        status,
+      });
+    }
+
+    return result;
+  }
+
+  useEffect(() => {
+    if (!jsonData) return;
+    if (!externalIds) return restoreOriginalState();
+    if (externalIds.length === 0) return restoreOriginalState();
+    const directShapeIds = getDirectShapeIdsByExternalIds(externalIds);
+    selectRoom(directShapeIds);
+  }, [externalIds]);
+
   useEffect(() => {
     if (!cuttingActive) {
       removePlane();
@@ -799,6 +1038,7 @@ const Visor = () => {
   return (
     <div
       style={{
+        filter: "saturate(5) contrast(1.2)",
         position: "relative",
         width: "100%",
         height: "100%",
@@ -818,7 +1058,7 @@ const Visor = () => {
           gap: "15px",
           position: "absolute",
           bottom: "20px",
-          left: "50%",
+          left: "46%",
           padding: "10px",
         }}
       >
@@ -907,72 +1147,6 @@ const Visor = () => {
           )}
         </div>
       </nav>
-      {meshes && meshes.length > 0 && (
-        <section
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            borderRadius: "5px",
-            gap: "10px",
-            position: "absolute",
-            width: "300px",
-            bottom: "50px",
-            left: "5px",
-            padding: "10px",
-            background: "#f9f9f9",
-            color: "#3D3C3B",
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-            }}
-          >
-            Meshes in the model
-          </p>
-          <div style={{ overflowY: "auto", maxHeight: "200px" }}>
-            <div
-              style={{
-                width: "100%",
-                display: "flex",
-                gap: "5px",
-                alignItems: "center",
-                justifyContent: "center",
-                marginBottom: "5px",
-              }}
-            >
-              <input
-                style={{
-                  padding: "2px",
-                  borderRadius: "5px",
-                  color: "black",
-                  border: "1px solid #3D3C3B",
-                  boxSizing: "border-box",
-                  backgroundColor: "#f9f9f9",
-                }}
-                type="text"
-                value={searcher}
-                onChange={(e) => setSearcher(e.target.value)}
-              />
-              <Button onClick={() => selectMeshes(searcher)}>+</Button>
-            </div>
-            {meshes.map((mesh, index) => {
-              if (mesh === "") return;
-              else
-                return (
-                  <button
-                    style={{ margin: 0, fontSize: "10px" }}
-                    key={index}
-                    onClick={() => selectMesh(mesh)}
-                  >
-                    {mesh}
-                  </button>
-                );
-            })}
-          </div>
-        </section>
-      )}
     </div>
   );
 };
