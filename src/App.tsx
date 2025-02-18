@@ -5,7 +5,12 @@ import "./App.css";
 function App() {
   return (
     <>
-      <Visor testMode={true} />
+      <Visor
+        roomsUrl={"/Muralto/rooms.glb"}
+        modelUrl={"/Muralto/compresedMuralto.glb"}
+        dataUrl={"/Muralto/props.json"}
+        testMode={true}
+      />
     </>
   );
 }

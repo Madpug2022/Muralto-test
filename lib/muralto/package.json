@@ -1,6 +1,6 @@
 {
   "name": "@madpug2022/muralto",
-  "version": "0.2.2",
+  "version": "0.2.7",
   "main": "dist/muralto.cjs.js",
   "module": "dist/muralto.es.js",
   "exports": {
@@ -19,12 +19,12 @@
     "dat.gui": "^0.7.9",
     "gsap": "^3.12.5",
     "lgl-tracer": "^2.0.0",
+    "n8ao": "^1.9.4",
     "postprocessing": "^6.36.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-icons": "^5.4.0",
-    "three-mesh-bvh": "^0.9.0",
-    "n8ao": "^1.9.4"
+    "three-mesh-bvh": "^0.9.0"
   },
   "dependencies": {
     "three": "^0.171.0"

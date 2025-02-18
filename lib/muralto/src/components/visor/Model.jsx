@@ -3,16 +3,16 @@ import * as THREE from "three";
 // Importa los loaders y controles que necesitas
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-
+import { HalfFloatType } from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass";
 import { CiMaximize2 } from "react-icons/ci";
 import { PiBoundingBox } from "react-icons/pi";
 import { MdOutlineCameraIndoor } from "react-icons/md";
-
 import { gsap } from "gsap";
 import Button from "../ui/Button";
 import Helper from "../ui/Helper";
@@ -26,11 +26,9 @@ import {
   computeBatchedBoundsTree,
   disposeBatchedBoundsTree,
   acceleratedRaycast,
+  MeshBVHHelper,
 } from "three-mesh-bvh";
 import { N8AOPass } from "n8ao";
-import modelUrl from "../../assets/Muralto/model.glb";
-import roomsUrl from "../../assets/Muralto/rooms.glb";
-import dataUrl from "../../assets/Muralto/props.json?url";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
 
 function extractOODDirectShapeIds(rooms) {
@@ -53,7 +51,14 @@ function extractOODDirectShapeIds(rooms) {
   return oodDirectShapeIds;
 }
 
-const Visor = ({ externalIds, testMode = false }) => {
+const Visor = ({
+  externalIds,
+  testMode = false,
+  dataUrl,
+  roomsUrl,
+  modelUrl,
+  backgroundColor = "#DAE7F2",
+}) => {
   const [showCameraControls, setShowCameraControls] = useState(false);
   const [cuttingActive, setCuttingActive] = useState(false);
   const visorRef = useRef();
@@ -75,6 +80,16 @@ const Visor = ({ externalIds, testMode = false }) => {
   const n8aopassRef = useRef(null);
   const isHoverActive = useRef(false);
   const animationFrameId = useRef(null);
+  const levelsRef = useRef([]);
+  const modelMaterialsRef = useRef([]);
+  const modelCloneRef = useRef(null);
+  const fillUpperClipPlaneRef = useRef(
+    new THREE.Plane(new THREE.Vector3(0, -1, 0), 0)
+  );
+  const fillLowerClipPlaneRef = useRef(
+    new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+  );
+  const clipPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, -1, 0), 0));
   const [jsonData, setJson] = useState(null);
 
   const cargarJSON = useCallback(async () => {
@@ -88,6 +103,7 @@ const Visor = ({ externalIds, testMode = false }) => {
       const datos = await respuesta.json();
       setJson(datos);
       roomsRef.current = extractOODDirectShapeIds(datos.rooms);
+      levelsRef.current = datos.levels;
       return datos;
     } catch (error) {
       console.error("Hubo un problema al cargar el JSON:", error);
@@ -115,9 +131,12 @@ const Visor = ({ externalIds, testMode = false }) => {
     // Configuración básica
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
+      powerPreference: "high-performance",
       alpha: true,
+      stencil: true,
+      depth: false,
     });
-
+    renderer.setClearColor(0x000000, 0);
     function render() {
       renderer.render(scene, camera);
     }
@@ -146,11 +165,12 @@ const Visor = ({ externalIds, testMode = false }) => {
     }
     // Crear escena, cámara y renderer
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xdae7f2);
+    //scene.background = new THREE.Color(0xdae7f2);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
     camera.position.set(-17, 26, 16);
+    camera.fov = 40;
     cameraRef.current = camera;
 
     // Controles de cámara
@@ -166,61 +186,31 @@ const Visor = ({ externalIds, testMode = false }) => {
       controls.enabled = !event.value;
     });
     transformControlsRef.current = control;
-
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
-    scene.add(ambientLight);
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.2);
     scene.add(hemiLight);
 
     const directionalLight = new THREE.DirectionalLight();
     // Ajustes de la luz direccional
     directionalLight.color.setHex(0xffffff);
-    directionalLight.intensity = 2.5;
+    directionalLight.intensity = 0.63;
     directionalLight.castShadow = true;
 
-    directionalLight.position.set(50, 100, 50);
+    directionalLight.position.set(70, 100, 70);
 
-    directionalLight.shadow.mapSize.set(4096 * 2, 4096 * 2);
+    directionalLight.shadow.mapSize.set(4096, 4096);
     // Asegúrate de que el 'near' y 'far' sean adecuados al tamaño de tu escena
-    directionalLight.shadow.camera.near = 0.5;
+
     directionalLight.shadow.camera.far = 200;
-    directionalLight.shadow.camera.left = -50;
-    directionalLight.shadow.camera.right = 50;
-    directionalLight.shadow.camera.top = 50;
-    directionalLight.shadow.camera.bottom = -50;
+    directionalLight.shadow.camera.left = -200;
+    directionalLight.shadow.camera.right = 200;
+    directionalLight.shadow.camera.top = 200;
+    directionalLight.shadow.camera.bottom = -200;
     // Un bias pequeño ayuda a evitar "bandas" en sombras
     directionalLight.shadow.bias = -0.0001;
-    directionalLight.shadow.normalBias = 0.001;
 
     scene.add(directionalLight);
 
     scene.fog = new THREE.Fog(0x949494, 1000, 3000);
-    for (let l = 0; l < 4; l++) {
-      const dirLight = new THREE.DirectionalLight(0xffffff, Math.PI / 2);
-      dirLight.name = "Dir. Light " + l;
-      dirLight.position.set(200, 200, 200);
-      dirLight.castShadow = true;
-      dirLight.shadow.camera.near = 100;
-      dirLight.shadow.camera.far = 5000;
-      dirLight.shadow.camera.right = 150;
-      dirLight.shadow.camera.left = -150;
-      dirLight.shadow.camera.top = 150;
-      dirLight.shadow.camera.bottom = -150;
-      dirLight.shadow.mapSize.width = 1024;
-      dirLight.shadow.mapSize.height = 1024;
-      dirLight.shadow.bias = -0.001;
-      scene.add(dirLight);
-    }
-
-    const groundMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(600, 600),
-      new THREE.MeshPhongMaterial({ color: 0xdae7f2, depthWrite: true })
-    );
-    groundMesh.position.y = -1;
-    groundMesh.rotation.x = -Math.PI / 2;
-    groundMesh.name = "Ground Mesh";
-    groundMesh.receiveShadow = true;
-    scene.add(groundMesh);
 
     const composer = new EffectComposer(renderer);
     composerRef.current = composer;
@@ -229,13 +219,6 @@ const Visor = ({ externalIds, testMode = false }) => {
     n8aopassRef.current = n8aopass;
     const renderPasse = new RenderPass(scene, camera);
     const outputPass = new OutputPass();
-
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      0.1,
-      0.05,
-      0.1
-    );
 
     const outlinePass = new OutlinePass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -249,27 +232,32 @@ const Visor = ({ externalIds, testMode = false }) => {
     outlinePass.visibleEdgeColor.set("#0055ff");
     outlinePass.hiddenEdgeColor.set("#0055ff");
 
-    n8aopass.configuration.aoRadius = 14;
+    n8aopass.configuration.aoRadius = 8;
     n8aopass.configuration.distanceFalloff = 2;
-    n8aopass.configuration.intensity = 4;
+    n8aopass.configuration.intensity = 1;
     n8aopass.configuration.color = new THREE.Color(0, 0, 0);
-    n8aopass.configuration.screenSpaceRadius = true;
-
-    n8aopass.configuration.accumulate = true;
-    n8aopass.configuration.stencil = true;
+    n8aopass.configuration.screenSpaceRadius = false;
 
     n8aopass.setQualityMode("Ultra");
 
-    n8aopass.configuration.aoSamples = 16;
+    n8aopass.configuration.aoSamples = 64;
 
     THREE.ColorManagement.legacyMode = false;
 
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
+    const fxaaPass = new ShaderPass(FXAAShader);
+    const pixelRatio = renderer.getPixelRatio();
+
+    fxaaPass.material.uniforms["resolution"].value.x =
+      1 / (visorRef.offsetWidth * pixelRatio);
+    fxaaPass.material.uniforms["resolution"].value.y =
+      1 / (visorRef.offsetHeight * pixelRatio);
+    composer.addPass(fxaaPass);
     composer.addPass(renderPasse); // RenderPass primero
     composer.addPass(n8aopass); // N8AOPass después
-    composer.addPass(bloomPass); // BloomPass después
     composer.addPass(outlinePass); // OutlinePass antes del OutputPass
+
     composer.addPass(outputPass);
 
     //MOUSEOVER
@@ -305,8 +293,39 @@ const Visor = ({ externalIds, testMode = false }) => {
       modelUrl,
       (glb) => {
         const model = glb.scene;
+
         storeOriginalMaterials(model, originalMaterialsRef);
         modelRef.current = model;
+
+        const modelClone = model.clone();
+        modelCloneRef.current = modelClone;
+        // Configurar el material de relleno para el clon
+        const fillMaterial = new THREE.MeshStandardMaterial({
+          color: 0x1f79db,
+          side: THREE.BackSide, // Cambio importante: solo renderizar el lado posterior
+          transparent: true,
+          opacity: 1,
+          clippingPlanes: [
+            fillUpperClipPlaneRef.current,
+            fillLowerClipPlaneRef.current,
+          ],
+          clipShadows: true,
+          depthWrite: false, // Evitar que escriba en el buffer de profundidad
+          stencilWrite: true,
+          stencilRef: 0,
+          stencilFunc: THREE.EqualStencilFunc,
+          stencilFail: THREE.KeepStencilOp,
+          stencilZFail: THREE.KeepStencilOp,
+          stencilZPass: THREE.ReplaceStencilOp,
+        });
+
+        modelClone.traverse((node) => {
+          if (node.isMesh) {
+            node.material = fillMaterial;
+            node.renderOrder = 2; // Asegurarse que se renderiza después del modelo original
+          }
+        });
+
         model.traverse((node) => {
           if (node.isMesh) {
             node.frustumCulled = true;
@@ -314,6 +333,13 @@ const Visor = ({ externalIds, testMode = false }) => {
             node.receiveShadow = true;
 
             node.geometry.computeVertexNormals();
+
+            const materials = Array.isArray(node.material)
+              ? node.material
+              : [node.material];
+            materials.forEach((material) => {
+              modelMaterialsRef.current.push(material);
+            });
           }
         });
         scene.add(model);
@@ -347,7 +373,7 @@ const Visor = ({ externalIds, testMode = false }) => {
 
             // Opcional: Configurar el BVH para la geometría original
             node.geometry.boundsTree = new MeshBVH(node.geometry, {
-              maxDepth: 40,
+              maxDepth: 400,
             });
           }
         });
@@ -403,7 +429,11 @@ const Visor = ({ externalIds, testMode = false }) => {
     }
     const renderTarget = new THREE.WebGLRenderTarget(
       Math.max(width, 1),
-      Math.max(height, 1)
+      Math.max(height, 1),
+      {
+        type: HalfFloatType,
+        depthTexture: new THREE.DepthTexture(),
+      }
     );
 
     // If you just want a depth buffer
@@ -429,10 +459,12 @@ const Visor = ({ externalIds, testMode = false }) => {
     let isCameraMoving = false;
 
     // Variables para el valor actual de denoise y sus objetivos
-    let currentDenoiseSamples = 2;
-    let currentDenoiseRadius = 1;
-    let targetDenoiseSamples = 2;
-    let targetDenoiseRadius = 1;
+    let currentDenoiseSamples = 6;
+    let currentDenoiseRadius = 6;
+    let targetDenoiseSamples = 4;
+    let targetDenoiseRadius = 6;
+    let currentIntensity = 1;
+    let targetIntensity = 1;
 
     // Función para detectar movimiento de cámara
     function updateCameraMovement(camera) {
@@ -459,19 +491,18 @@ const Visor = ({ externalIds, testMode = false }) => {
       if (isCameraMoving) {
         targetDenoiseSamples = 8;
         targetDenoiseRadius = 12;
+        targetIntensity = 1;
       } else {
         targetDenoiseSamples = 2;
         targetDenoiseRadius = 1;
+        targetIntensity = 2.3;
       }
     }
 
     // Función para ir interpolando progresivamente hacia esos valores objetivo
     function updateN8AOParameters(n8aopass) {
-      // Factor de interpolación (ajusta este valor para cambiar la velocidad de transición)
       const lerpFactor = 0.05;
 
-      // Interpolamos de forma lineal para que currentDenoiseSamples y currentDenoiseRadius
-      // se acerquen poco a poco a los valores deseados (target)
       currentDenoiseSamples = THREE.MathUtils.lerp(
         currentDenoiseSamples,
         targetDenoiseSamples,
@@ -484,10 +515,16 @@ const Visor = ({ externalIds, testMode = false }) => {
         lerpFactor
       );
 
-      // Asignamos estos valores al pass
-      // Nota: si denoiseSamples requiere ser entero, podrías usar Math.round(...)
+      // Interpolación para intensity
+      currentIntensity = THREE.MathUtils.lerp(
+        currentIntensity,
+        targetIntensity,
+        lerpFactor
+      );
+
       n8aopass.configuration.denoiseSamples = Math.round(currentDenoiseSamples);
       n8aopass.configuration.denoiseRadius = Math.round(currentDenoiseRadius);
+      n8aopass.configuration.intensity = currentIntensity; // Asignar el valor actualizado
     }
 
     // Para calcular 'delta' (el tiempo transcurrido entre frames),
@@ -498,9 +535,6 @@ const Visor = ({ externalIds, testMode = false }) => {
 
     if (testMode) {
       const gui = new GUI();
-      //Folder de luz ambiental
-      const ambientLightFolder = gui.addFolder("Ambient Light");
-      ambientLightFolder.add(ambientLight, "intensity", 0, 1, 0.01);
 
       //Folder de luz direccional
       const directionalLightFolder = gui.addFolder("Directional Light");
@@ -530,23 +564,6 @@ const Visor = ({ externalIds, testMode = false }) => {
       //Folder de luz hemisférica
       const hemiLightFolder = gui.addFolder("Hemisphere Light");
       hemiLightFolder.add(hemiLight, "intensity", 0, 1, 0.01);
-
-      //folder de otras luces
-      const otherLightsFolder = gui.addFolder("Other Lights");
-      for (let i = 0; i < 4; i++) {
-        const light = scene.getObjectByName(`Dir. Light ${i}`);
-        const lightFolder = otherLightsFolder.addFolder(`Dir. Light ${i}`);
-        lightFolder.add(light, "intensity", 0, 10, 0.01);
-        lightFolder.add(light.position, "x", -100, 100, 0.1);
-        lightFolder.add(light.position, "y", -100, 100, 0.1);
-        lightFolder.add(light.position, "z", -100, 100, 0.1);
-      }
-
-      //folder de bloom
-      const bloomFolder = gui.addFolder("Bloom Pass");
-      bloomFolder.add(bloomPass, "strength", 0, 5, 0.01);
-      bloomFolder.add(bloomPass, "radius", 0, 5, 0.01);
-      bloomFolder.add(bloomPass, "threshold", 0, 1, 0.01);
 
       //folder de n8aopass
       const n8aopassFolder = gui.addFolder("N8AO Pass");
@@ -1035,10 +1052,47 @@ const Visor = ({ externalIds, testMode = false }) => {
     }
   }, [cuttingActive]);
 
+  function setCutLevel(y) {
+    if (y === "none") {
+      modelMaterialsRef.current.forEach((material) => {
+        material.clippingPlanes = [];
+        material.needsUpdate = true;
+      });
+      if (modelCloneRef.current) {
+        sceneRef.current.remove(modelCloneRef.current);
+      }
+      return;
+    }
+
+    y = y + 2;
+
+    // Configurar el plano de corte para el modelo original
+    clipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y);
+
+    // Configurar los planos de corte para el relleno
+    // El plano superior corta ligeramente por encima
+    fillUpperClipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y + 0.1);
+    // El plano inferior corta ligeramente por debajo
+    fillLowerClipPlaneRef.current.set(new THREE.Vector3(0, 1, 0), -(y - 0.1));
+
+    if (
+      modelCloneRef.current &&
+      !sceneRef.current.children.includes(modelCloneRef.current)
+    ) {
+      sceneRef.current.add(modelCloneRef.current);
+    }
+
+    // Actualizar la posición del plano de corte en los materiales originales
+    modelMaterialsRef.current.forEach((material) => {
+      material.clippingPlanes = [clipPlaneRef.current];
+      material.needsUpdate = true;
+    });
+  }
+
   return (
     <div
       style={{
-        filter: "saturate(5) contrast(1.2)",
+        backgroundColor: `${backgroundColor}`,
         position: "relative",
         width: "100%",
         height: "100%",
@@ -1047,6 +1101,7 @@ const Visor = ({ externalIds, testMode = false }) => {
       <section
         ref={visorRef}
         style={{
+          filter: "saturate(3) contrast(1.2)",
           position: "relative",
           width: "100%",
           height: "100%",
@@ -1147,6 +1202,23 @@ const Visor = ({ externalIds, testMode = false }) => {
           )}
         </div>
       </nav>
+      <div
+        style={{
+          position: "absolute",
+          gap: "5px",
+          top: "20px",
+          right: "20px",
+          color: "black",
+          padding: "5px",
+          background: "#f9f9f9",
+          borderRadius: "5px",
+          boxShadow: "0 0 5px rgba(0,0,0,0.1)",
+        }}
+      >
+        <button onClick={() => setCutLevel("none")}>None</button>
+        <button onClick={() => setCutLevel(levelsRef.current.S02)}>S02</button>
+        <button onClick={() => setCutLevel(levelsRef.current.P03)}>P03</button>
+      </div>
     </div>
   );
 };
