@@ -8,6 +8,7 @@ const Visor = ({
   roomsUrl,
   modelUrl,
   backgroundColor,
+  level,
 }) => {
   return (
     <Model
@@ -17,6 +18,7 @@ const Visor = ({
       roomsUrl={roomsUrl}
       modelUrl={modelUrl}
       backgroundColor={backgroundColor}
+      level={level}
     />
   );
 };

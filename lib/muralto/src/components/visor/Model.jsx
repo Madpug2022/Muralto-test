@@ -26,10 +26,14 @@ import {
   computeBatchedBoundsTree,
   disposeBatchedBoundsTree,
   acceleratedRaycast,
-  MeshBVHHelper,
 } from "three-mesh-bvh";
 import { N8AOPass } from "n8ao";
 import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+
+import arcUrl from "../../assets/Muralto/arc.glb";
+import entUrl from "../../assets/Muralto/ent.glb";
+import mepUrl from "../../assets/Muralto/MEP.glb";
+import strUrl from "../../assets/Muralto/str.glb";
 
 function extractOODDirectShapeIds(rooms) {
   const oodDirectShapeIds = [];
@@ -58,9 +62,11 @@ const Visor = ({
   roomsUrl,
   modelUrl,
   backgroundColor = "#DAE7F2",
+  level,
 }) => {
   const [showCameraControls, setShowCameraControls] = useState(false);
   const [cuttingActive, setCuttingActive] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
   const visorRef = useRef();
   const cameraRef = useRef();
   const controlsRef = useRef();
@@ -83,6 +89,12 @@ const Visor = ({
   const levelsRef = useRef([]);
   const modelMaterialsRef = useRef([]);
   const modelCloneRef = useRef(null);
+
+  const arcModelRef = useRef(null);
+  const entModelRef = useRef(null);
+  const mepModelRef = useRef(null);
+  const strModelRef = useRef(null);
+
   const fillUpperClipPlaneRef = useRef(
     new THREE.Plane(new THREE.Vector3(0, -1, 0), 0)
   );
@@ -114,9 +126,9 @@ const Visor = ({
   const darkerTransparentGrayMaterial = new THREE.MeshStandardMaterial({
     color: 0xd3d3d3,
     transparent: true,
-    opacity: 0.05,
-    roughness: 0.1,
-    metalness: 0.06,
+    opacity: 0.1,
+    roughness: 0.5,
+    metalness: 0.3,
     depthWrite: false,
   });
 
@@ -168,7 +180,12 @@ const Visor = ({
     //scene.background = new THREE.Color(0xdae7f2);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      width / height,
+      0.1, // near plane
+      10000 // far plane - aumentado significativamente
+    );
     camera.position.set(-17, 26, 16);
     camera.fov = 40;
     cameraRef.current = camera;
@@ -178,7 +195,30 @@ const Visor = ({
     controls.dampingFactor = 0.2;
     controls.enableDamping = true;
     controls.target.set(3, 7, -3);
+    controls.maxDistance = Infinity; // Permite alejarse infinitamente
+    controls.minDistance = 0; // Permite acercarse hasta el target
+    controls.enablePan = true; // Asegura que el pan esté habilitado
+    controls.panSpeed = 1.0; // Velocidad de pan (ajusta según necesites)
+    controls.screenSpacePanning = true; // Mejor comportamiento para el pan
     controlsRef.current = controls;
+
+    renderer.domElement.addEventListener("wheel", (event) => {
+      event.preventDefault();
+
+      const direction = event.deltaY > 0 ? 1 : -1;
+      const speed = 0.5; // Ajusta según necesites
+
+      const vector = new THREE.Vector3();
+      camera.getWorldDirection(vector);
+
+      camera.position.add(vector.multiplyScalar(speed * direction));
+      controls.target.add(vector.multiplyScalar(speed * direction));
+
+      controls.update();
+    });
+
+    // No olvides actualizar la matriz de proyección después de cambiar el far plane
+    camera.updateProjectionMatrix();
 
     const control = new TransformControls(camera, renderer.domElement);
     control.addEventListener("objectChange", render);
@@ -206,11 +246,11 @@ const Visor = ({
     directionalLight.shadow.camera.top = 200;
     directionalLight.shadow.camera.bottom = -200;
     // Un bias pequeño ayuda a evitar "bandas" en sombras
-    directionalLight.shadow.bias = -0.0001;
+    directionalLight.shadow.bias = -0.0002;
 
     scene.add(directionalLight);
 
-    scene.fog = new THREE.Fog(0x949494, 1000, 3000);
+    scene.fog = new THREE.Fog(0x949494, 1000, 1000000);
 
     const composer = new EffectComposer(renderer);
     composerRef.current = composer;
@@ -288,6 +328,53 @@ const Visor = ({
     // Agregar el listener para el movimiento del mouse
     window.addEventListener("mousemove", onMouseMove);
 
+    // Cargar el modelo ARC
+    loader.load(
+      arcUrl,
+      (glb) => {
+        const model = glb.scene;
+        arcModelRef.current = model;
+      },
+      (progress) => {},
+      (error) => {
+        console.error("Error cargando el modelo:", error);
+      }
+    );
+    loader.load(
+      entUrl,
+      (glb) => {
+        const model = glb.scene;
+        entModelRef.current = model;
+        scene.add(model);
+      },
+      (progress) => {},
+      (error) => {
+        console.error("Error cargando el modelo:", error);
+      }
+    );
+    loader.load(
+      mepUrl,
+      (glb) => {
+        const model = glb.scene;
+        mepModelRef.current = model;
+      },
+      (progress) => {},
+      (error) => {
+        console.error("Error cargando el modelo:", error);
+      }
+    );
+    loader.load(
+      strUrl,
+      (glb) => {
+        const model = glb.scene;
+        strModelRef.current = model;
+      },
+      (progress) => {},
+      (error) => {
+        console.error("Error cargando el modelo:", error);
+      }
+    );
+
     let meshList = [];
     loader.load(
       modelUrl,
@@ -325,9 +412,10 @@ const Visor = ({
             node.renderOrder = 2; // Asegurarse que se renderiza después del modelo original
           }
         });
-
         model.traverse((node) => {
           if (node.isMesh) {
+            node.material.metalness = 0.1;
+            node.material.roughness = 0.2;
             node.frustumCulled = true;
             node.castShadow = true;
             node.receiveShadow = true;
@@ -823,9 +911,6 @@ const Visor = ({
     const controls = controlsRef.current;
     if (!camera || !controls) return;
 
-    const center = new THREE.Vector3();
-    boxHelperRef.current.getCenter(center);
-
     // Usamos gsap para interpolar la posición de la cámara
     gsap.to(camera.position, {
       duration: time,
@@ -837,8 +922,6 @@ const Visor = ({
         controls.update();
       },
       onComplete: () => {
-        camera.lookAt(center);
-        controls.target.copy(center);
         controls.update();
       },
     });
@@ -914,8 +997,6 @@ const Visor = ({
       return alert(`IDs no encontrados: ${invalidIds.join(", ")}`);
     }
 
-    const n8aopass = n8aopassRef.current;
-    n8aopass.setQualityMode("Ultra");
     // Transparentar todos los elementos del modelo original
     modelRef.current.traverse((node) => {
       if (node.isMesh) {
@@ -1052,7 +1133,18 @@ const Visor = ({
     }
   }, [cuttingActive]);
 
+  useEffect(() => {
+    if (!level) return;
+    if (level === "none") {
+      setCutLevel("none");
+    } else {
+      setCutLevel(parseInt(level));
+    }
+  }, [level]);
+
   function setCutLevel(y) {
+    //verificar si el modelo esta cargado
+    if (!modelRef.current) return;
     if (y === "none") {
       modelMaterialsRef.current.forEach((material) => {
         material.clippingPlanes = [];
@@ -1061,11 +1153,13 @@ const Visor = ({
       if (modelCloneRef.current) {
         sceneRef.current.remove(modelCloneRef.current);
       }
+      moveCamera({ x: -17, y: 26, z: 16 });
       return;
     }
 
     y = y + 2;
-
+    //mover camara a la altura
+    moveCamera({ x: -17, y: 26 + y, z: 16 });
     // Configurar el plano de corte para el modelo original
     clipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y);
 
@@ -1087,6 +1181,53 @@ const Visor = ({
       material.clippingPlanes = [clipPlaneRef.current];
       material.needsUpdate = true;
     });
+  }
+
+  function hideEnt(event) {
+    const newState = event.target.checked;
+    setIsVisible(newState);
+    if (entModelRef.current) {
+      entModelRef.current.traverse((node) => {
+        if (node.isMesh) {
+          node.visible = newState;
+        }
+      });
+    }
+  }
+
+  function displayMEPs(modelName) {
+    // Primero, hacer transparente el modelo principal
+    if (modelRef.current) {
+      modelRef.current.traverse((node) => {
+        if (node.isMesh) {
+          node.material = darkerTransparentGrayMaterial;
+          node.castShadow = false;
+          node.receiveShadow = false;
+        }
+      });
+    }
+
+    // Remover todos los modelos existentes de la escena, excepto ent
+    const models = {
+      arc: arcModelRef.current,
+      mep: mepModelRef.current,
+      str: strModelRef.current,
+    };
+
+    // Primero removemos los modelos (excepto ent)
+    Object.values(models).forEach((model) => {
+      if (model && sceneRef.current.children.includes(model)) {
+        sceneRef.current.remove(model);
+      }
+    });
+
+    // Luego añadimos solo el modelo seleccionado
+    if (modelName !== "default" && models[modelName]) {
+      sceneRef.current.add(models[modelName]);
+    } else if (modelName !== "ent") {
+      // Solo restauramos si no es 'ent'
+      restoreOriginalState();
+    }
   }
 
   return (
@@ -1180,22 +1321,22 @@ const Visor = ({
                 boxShadow: "0 0 5px rgba(0,0,0,0.1)",
               }}
             >
-              <MenuButton onClick={() => moveCamera({ x: 0, y: 30, z: 0 })}>
+              <MenuButton onClick={() => moveCamera({ x: 0, y: 70, z: 0 })}>
                 Arriba
               </MenuButton>
-              <MenuButton onClick={() => moveCamera({ x: -30, y: 0, z: 0 })}>
+              <MenuButton onClick={() => moveCamera({ x: -70, y: 0, z: 0 })}>
                 Izquierda
               </MenuButton>
-              <MenuButton onClick={() => moveCamera({ x: 0, y: -30, z: 0 })}>
+              <MenuButton onClick={() => moveCamera({ x: 0, y: -70, z: 0 })}>
                 Abajo
               </MenuButton>
-              <MenuButton onClick={() => moveCamera({ x: 30, y: 0, z: 0 })}>
+              <MenuButton onClick={() => moveCamera({ x: 70, y: 0, z: 0 })}>
                 Derecha
               </MenuButton>
-              <MenuButton onClick={() => moveCamera({ x: 0, y: 0, z: 30 })}>
+              <MenuButton onClick={() => moveCamera({ x: 0, y: 0, z: 70 })}>
                 Frente
               </MenuButton>
-              <MenuButton onClick={() => moveCamera({ x: 0, y: 0, z: -30 })}>
+              <MenuButton onClick={() => moveCamera({ x: 0, y: 0, z: -70 })}>
                 Detras
               </MenuButton>
             </div>
@@ -1205,19 +1346,46 @@ const Visor = ({
       <div
         style={{
           position: "absolute",
-          gap: "5px",
+          display: "flex",
           top: "20px",
-          right: "20px",
-          color: "black",
-          padding: "5px",
-          background: "#f9f9f9",
-          borderRadius: "5px",
-          boxShadow: "0 0 5px rgba(0,0,0,0.1)",
+          left: "20px",
         }}
       >
-        <button onClick={() => setCutLevel("none")}>None</button>
-        <button onClick={() => setCutLevel(levelsRef.current.S02)}>S02</button>
-        <button onClick={() => setCutLevel(levelsRef.current.P03)}>P03</button>
+        <MenuButton onClick={() => displayMEPs("arc")}>Arc</MenuButton>
+        <MenuButton onClick={() => displayMEPs("mep")}>Mep</MenuButton>
+        <MenuButton onClick={() => displayMEPs("str")}>Str</MenuButton>
+        <MenuButton onClick={() => displayMEPs("none")}>None</MenuButton>
+        <div className="flex items-center space-x-2">
+          <input
+            type="checkbox"
+            id="entVisibility"
+            checked={isVisible}
+            onChange={hideEnt}
+          />
+          <label htmlFor="entVisibility" style={{ color: "black" }}>
+            Mostrar ENT
+          </label>
+        </div>
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          display: "flex",
+          flexDirection: "column",
+          top: "20px",
+          right: "20px",
+        }}
+      >
+        {Object.entries(levelsRef.current)
+          .sort(([, a], [, b]) => b - a) // Ordenar de mayor a menor altura
+          .map(([level, height]) => (
+            <MenuButton key={level} onClick={() => setCutLevel(height)}>
+              {level} ({height.toFixed(2)}m)
+            </MenuButton>
+          ))}
+        <MenuButton key={level} onClick={() => setCutLevel("none")}>
+          None
+        </MenuButton>
       </div>
     </div>
   );
