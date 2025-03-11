@@ -12,7 +12,7 @@ import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass";
 import { CiMaximize2 } from "react-icons/ci";
 import { PiBoundingBox } from "react-icons/pi";
-import { MdOutlineCameraIndoor } from "react-icons/md";
+import { MdOutlineCameraIndoor, MdOutlineViewInAr } from "react-icons/md";
 import { gsap } from "gsap";
 import Button from "../ui/Button";
 import Helper from "../ui/Helper";
@@ -67,8 +67,13 @@ const Visor = ({
   const [showCameraControls, setShowCameraControls] = useState(false);
   const [cuttingActive, setCuttingActive] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
+  const [isTopView, setIsTopView] = useState(false);
+  const originalCameraPositionRef = useRef(null);
+  const originalControlsTargetRef = useRef(null);
   const visorRef = useRef();
   const cameraRef = useRef();
+  const orthographicCameraRef = useRef(null);
+  const perspectiveCameraRef = useRef(null);
   const controlsRef = useRef();
   const rendererRef = useRef();
   const sceneRef = useRef();
@@ -89,6 +94,16 @@ const Visor = ({
   const levelsRef = useRef([]);
   const modelMaterialsRef = useRef([]);
   const modelCloneRef = useRef(null);
+  const originalMaterialsMapRef = useRef(new Map());
+  const mepModelMaterialsRef = useRef([]);
+  const strModelMaterialsRef = useRef([]);
+  const arcModelMaterialsRef = useRef([]);
+  const roomsModelMaterialsRef = useRef([]);
+  const originalAoIntensityRef = useRef(null);
+  const targetIntensityRef = useRef(2.3); // Valor predeterminado
+  const targetDenoiseSamplesRef = useRef(4);
+  const targetDenoiseRadiusRef = useRef(6);
+  const isTopViewRef = useRef(false);
 
   const arcModelRef = useRef(null);
   const entModelRef = useRef(null);
@@ -188,8 +203,21 @@ const Visor = ({
     );
     camera.position.set(-17, 26, 16);
     camera.fov = 40;
+    perspectiveCameraRef.current = camera;
     cameraRef.current = camera;
 
+    const frustumSize = 30;
+    const aspect = width / height;
+    const orthographicCamera = new THREE.OrthographicCamera(
+      (frustumSize * aspect) / -2,
+      (frustumSize * aspect) / 2,
+      frustumSize / 2,
+      frustumSize / -2,
+      0.1,
+      10000
+    );
+    orthographicCamera.position.set(-17, 26, 16);
+    orthographicCameraRef.current = orthographicCamera;
     // Controles de cámara
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.dampingFactor = 0.2;
@@ -237,7 +265,7 @@ const Visor = ({
 
     directionalLight.position.set(70, 100, 70);
 
-    directionalLight.shadow.mapSize.set(4096, 4096);
+    directionalLight.shadow.mapSize.set(4096 * 2, 4096 * 2);
     // Asegúrate de que el 'near' y 'far' sean adecuados al tamaño de tu escena
 
     directionalLight.shadow.camera.far = 200;
@@ -246,7 +274,7 @@ const Visor = ({
     directionalLight.shadow.camera.top = 200;
     directionalLight.shadow.camera.bottom = -200;
     // Un bias pequeño ayuda a evitar "bandas" en sombras
-    directionalLight.shadow.bias = -0.0002;
+    directionalLight.shadow.bias = -0.0005;
 
     scene.add(directionalLight);
 
@@ -334,6 +362,18 @@ const Visor = ({
       (glb) => {
         const model = glb.scene;
         arcModelRef.current = model;
+        model.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            const materials = Array.isArray(node.material)
+              ? node.material
+              : [node.material];
+            materials.forEach((material) => {
+              arcModelMaterialsRef.current.push(material);
+            });
+          }
+        });
       },
       (progress) => {},
       (error) => {
@@ -345,7 +385,6 @@ const Visor = ({
       (glb) => {
         const model = glb.scene;
         entModelRef.current = model;
-        scene.add(model);
       },
       (progress) => {},
       (error) => {
@@ -357,10 +396,25 @@ const Visor = ({
       (glb) => {
         const model = glb.scene;
         mepModelRef.current = model;
+
+        model.traverse((node) => {
+          if (node.isMesh) {
+            // Guarda sus materiales
+            const materials = Array.isArray(node.material)
+              ? node.material
+              : [node.material];
+            materials.forEach((material) => {
+              mepModelMaterialsRef.current.push(material);
+            });
+
+            node.castShadow = true;
+            node.receiveShadow = true;
+          }
+        });
       },
       (progress) => {},
       (error) => {
-        console.error("Error cargando el modelo:", error);
+        console.error("Error cargando el modelo mep:", error);
       }
     );
     loader.load(
@@ -368,6 +422,21 @@ const Visor = ({
       (glb) => {
         const model = glb.scene;
         strModelRef.current = model;
+
+        model.traverse((node) => {
+          if (node.isMesh) {
+            // Guarda sus materiales
+            const materials = Array.isArray(node.material)
+              ? node.material
+              : [node.material];
+            materials.forEach((material) => {
+              strModelMaterialsRef.current.push(material);
+            });
+
+            node.castShadow = true;
+            node.receiveShadow = true;
+          }
+        });
       },
       (progress) => {},
       (error) => {
@@ -389,7 +458,7 @@ const Visor = ({
         // Configurar el material de relleno para el clon
         const fillMaterial = new THREE.MeshStandardMaterial({
           color: 0x1f79db,
-          side: THREE.BackSide, // Cambio importante: solo renderizar el lado posterior
+          side: 2, // Cambio importante: solo renderizar el lado posterior
           transparent: true,
           opacity: 1,
           clippingPlanes: [
@@ -442,40 +511,42 @@ const Visor = ({
     const roomMeshes = [];
     const roomsIds = [];
     let roomModel;
-    roomLoader.load(
-      roomsUrl,
-      (glb) => {
-        roomModel = glb.scene;
-        roomsModelRef.current = roomModel;
-        storeOriginalMaterials(roomModel, roomsOriginalMaterialsRef);
+    if (roomsUrl) {
+      roomLoader.load(
+        roomsUrl,
+        (glb) => {
+          roomModel = glb.scene;
+          roomsModelRef.current = roomModel;
+          storeOriginalMaterials(roomModel, roomsOriginalMaterialsRef);
 
-        // Recorrer todos los nodos del modelo
-        roomModel.traverse((node) => {
-          if (node.isMesh) {
-            node.frustumCulled = true;
-            const match = node.name.match(/<(\d{7})/);
-            const number = match && match[1];
-            roomMeshes.push(node);
-            roomsIds.push(number);
-            meshList.push(node);
+          // Recorrer todos los nodos del modelo
+          roomModel.traverse((node) => {
+            if (node.isMesh) {
+              node.frustumCulled = true;
+              const match = node.name.match(/<(\d{7})/);
+              const number = match && match[1];
+              roomMeshes.push(node);
+              roomsIds.push(number);
+              meshList.push(node);
 
-            // Opcional: Configurar el BVH para la geometría original
-            node.geometry.boundsTree = new MeshBVH(node.geometry, {
-              maxDepth: 400,
-            });
+              // Opcional: Configurar el BVH para la geometría original
+              node.geometry.boundsTree = new MeshBVH(node.geometry, {
+                maxDepth: 400,
+              });
+            }
+          });
+
+          // Configurar el outlinePass si existe
+          if (outlinePass) {
+            outlinePass.selectedObjects = meshList; // Seleccionar el modelo cargado
           }
-        });
-
-        // Configurar el outlinePass si existe
-        if (outlinePass) {
-          outlinePass.selectedObjects = meshList; // Seleccionar el modelo cargado
+        },
+        (progress) => {},
+        (error) => {
+          console.error("Error cargando el modelo de rooms:", error);
         }
-      },
-      (progress) => {},
-      (error) => {
-        console.error("Error cargando el modelo de rooms:", error);
-      }
-    );
+      );
+    }
 
     function updateRaycaster() {
       if (!isHoverActive.current) return;
@@ -549,11 +620,7 @@ const Visor = ({
     // Variables para el valor actual de denoise y sus objetivos
     let currentDenoiseSamples = 6;
     let currentDenoiseRadius = 6;
-    let targetDenoiseSamples = 4;
-    let targetDenoiseRadius = 6;
     let currentIntensity = 1;
-    let targetIntensity = 1;
-
     // Función para detectar movimiento de cámara
     function updateCameraMovement(camera) {
       const positionThreshold = 0.01; // Umbral para detectar movimiento en la posición
@@ -576,14 +643,21 @@ const Visor = ({
 
     // Función para definir los valores objetivo según si la cámara se mueve o no
     function setN8AOTargetValues() {
-      if (isCameraMoving) {
-        targetDenoiseSamples = 8;
-        targetDenoiseRadius = 12;
-        targetIntensity = 1;
+      if (isTopViewRef.current) {
+        // Si estamos en vista 2D, mantener alta intensidad sin importar el movimiento
+        targetDenoiseSamplesRef.current = 2;
+        targetDenoiseRadiusRef.current = 1;
+        targetIntensityRef.current = 6; // Alta intensidad para vista 2D
+      } else if (isCameraMoving) {
+        // Valores normales para movimiento en vista 3D
+        targetDenoiseSamplesRef.current = 8;
+        targetDenoiseRadiusRef.current = 12;
+        targetIntensityRef.current = 1;
       } else {
-        targetDenoiseSamples = 2;
-        targetDenoiseRadius = 1;
-        targetIntensity = 2.3;
+        // Valores normales para vista 3D estática
+        targetDenoiseSamplesRef.current = 2;
+        targetDenoiseRadiusRef.current = 1;
+        targetIntensityRef.current = 2.3;
       }
     }
 
@@ -593,20 +667,20 @@ const Visor = ({
 
       currentDenoiseSamples = THREE.MathUtils.lerp(
         currentDenoiseSamples,
-        targetDenoiseSamples,
+        targetDenoiseSamplesRef.current, // Usa la referencia en lugar de la variable local
         lerpFactor
       );
 
       currentDenoiseRadius = THREE.MathUtils.lerp(
         currentDenoiseRadius,
-        targetDenoiseRadius,
+        targetDenoiseRadiusRef.current, // Usa la referencia en lugar de la variable local
         lerpFactor
       );
 
       // Interpolación para intensity
       currentIntensity = THREE.MathUtils.lerp(
         currentIntensity,
-        targetIntensity,
+        targetIntensityRef.current, // Usa la referencia en lugar de la variable local
         lerpFactor
       );
 
@@ -699,6 +773,19 @@ const Visor = ({
     const handleResize = () => {
       const width = Math.max(visorRef.current.clientWidth, 1); // Mínimo 1px
       const height = Math.max(visorRef.current.clientHeight, 1); // Mínimo 1px
+
+      perspectiveCameraRef.current.aspect = width / height;
+      perspectiveCameraRef.current.updateProjectionMatrix();
+
+      // Actualizar cámara ortográfica
+      const frustumSize = 30;
+      const aspect = width / height;
+      orthographicCameraRef.current.left = (frustumSize * aspect) / -2;
+      orthographicCameraRef.current.right = (frustumSize * aspect) / 2;
+      orthographicCameraRef.current.top = frustumSize / 2;
+      orthographicCameraRef.current.bottom = frustumSize / -2;
+      orthographicCameraRef.current.updateProjectionMatrix();
+
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
@@ -719,6 +806,10 @@ const Visor = ({
         cancelAnimationFrame(animationFrameId.current);
       }
 
+      //eliminar todos los modelos
+      if (modelRef.current) {
+        disposeModel();
+      }
       // Limpieza de controles
       if (controlsRef.current) {
         controlsRef.current.dispose();
@@ -970,11 +1061,13 @@ const Visor = ({
     });
 
     // Restaurar la visibilidad de todos los nodos del modelo de habitaciones
-    roomsModelRef.current.traverse((node) => {
-      if (node.isMesh) {
-        node.visible = true; // Asegurarse de que todos los nodos estén visibles
-      }
-    });
+    if (roomsModelRef.current) {
+      roomsModelRef.current.traverse((node) => {
+        if (node.isMesh) {
+          node.visible = true; // Asegurarse de que todos los nodos estén visibles
+        }
+      });
+    }
 
     // Quitar el modelo de habitaciones de la escena si está presente
     if (sceneRef.current.children.includes(roomsModelRef.current)) {
@@ -1143,32 +1236,75 @@ const Visor = ({
   }, [level]);
 
   function setCutLevel(y) {
-    //verificar si el modelo esta cargado
+    // Verificar que el modelo esté cargado
     if (!modelRef.current) return;
+
+    // Guardar estado actual de los materiales antes de modificarlos
+    const is2DMode = isTopViewRef.current;
+
     if (y === "none") {
+      // Eliminar todos los planos de recorte
       modelMaterialsRef.current.forEach((material) => {
         material.clippingPlanes = [];
         material.needsUpdate = true;
       });
+
+      // Eliminar el modelo clonado si existe
       if (modelCloneRef.current) {
         sceneRef.current.remove(modelCloneRef.current);
       }
-      moveCamera({ x: -17, y: 26, z: 16 });
+
+      // Establecer la constante del plano de recorte a 0 para indicar que no hay recorte activo
+      clipPlaneRef.current.constant = 0;
+
+      // Si está en vista 2D, actualizar la posición de la cámara
+      if (is2DMode) {
+        const boundingBox = new THREE.Box3().setFromObject(modelRef.current);
+        const center = boundingBox.getCenter(new THREE.Vector3());
+        const size = boundingBox.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.z) * 1.2;
+
+        moveCamera({
+          x: center.x,
+          y: center.y + maxDim * 0.75,
+          z: center.z,
+        });
+
+        controlsRef.current.target.set(center.x, center.y, center.z);
+      } else {
+        // Mover a la posición de cámara 3D predeterminada si no está en modo 2D
+        moveCamera({ x: -17, y: 26, z: 16 });
+      }
+
+      // Volver a aplicar el estilo blanco y negro si está en modo 2D
+      if (is2DMode) {
+        // Pequeño retraso para asegurar que los materiales se actualicen después de eliminar los recortes
+        setTimeout(() => {
+          applyBlackAndWhiteStyling();
+        }, 50);
+      }
+
       return;
     }
 
+    // Añadir 2 al valor y como en la función original
     y = y + 2;
-    //mover camara a la altura
-    moveCamera({ x: -17, y: 26 + y, z: 16 });
-    // Configurar el plano de corte para el modelo original
+
+    // Configurar el plano de recorte
     clipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y);
 
-    // Configurar los planos de corte para el relleno
-    // El plano superior corta ligeramente por encima
-    fillUpperClipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y + 0.1);
-    // El plano inferior corta ligeramente por debajo
-    fillLowerClipPlaneRef.current.set(new THREE.Vector3(0, 1, 0), -(y - 0.1));
+    // Configurar los planos de relleno según el modo (más grueso en 2D)
+    if (is2DMode) {
+      // Corte más grueso para vista 2D
+      fillUpperClipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y + 0.3);
+      fillLowerClipPlaneRef.current.set(new THREE.Vector3(0, 1, 0), -(y - 0.3));
+    } else {
+      // Grosor normal para vista 3D
+      fillUpperClipPlaneRef.current.set(new THREE.Vector3(0, -1, 0), y + 0.1);
+      fillLowerClipPlaneRef.current.set(new THREE.Vector3(0, 1, 0), -(y - 0.1));
+    }
 
+    // Añadir el modelo clonado si es necesario
     if (
       modelCloneRef.current &&
       !sceneRef.current.children.includes(modelCloneRef.current)
@@ -1176,12 +1312,362 @@ const Visor = ({
       sceneRef.current.add(modelCloneRef.current);
     }
 
-    // Actualizar la posición del plano de corte en los materiales originales
-    modelMaterialsRef.current.forEach((material) => {
-      material.clippingPlanes = [clipPlaneRef.current];
-      material.needsUpdate = true;
+    // Actualizar materiales con planos de recorte
+    modelMaterialsRef.current.forEach((mat) => {
+      mat.clippingPlanes = [clipPlaneRef.current];
+      mat.clipShadows = true;
+      mat.needsUpdate = true;
     });
+
+    // Manejar el posicionamiento de la cámara según el modo de vista actual
+    if (is2DMode) {
+      // Si está en vista 2D, mover la cámara directamente sobre el nivel de corte
+      const boundingBox = new THREE.Box3().setFromObject(modelRef.current);
+      const center = boundingBox.getCenter(new THREE.Vector3());
+      const size = boundingBox.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.z) * 1.2;
+
+      // Posicionar la cámara sobre el plano de corte
+      moveCamera({
+        x: center.x,
+        y: y + maxDim * 0.5, // Posición relativa al plano de corte
+        z: center.z,
+      });
+
+      // Establecer el objetivo en el nivel del plano de corte
+      controlsRef.current.target.set(center.x, y, center.z);
+      controlsRef.current.update();
+
+      // Volver a aplicar el estilo blanco y negro después de un breve retraso
+      // Esto asegura que el estilo se aplique después de establecer los planos de recorte
+      setTimeout(() => {
+        applyBlackAndWhiteStyling();
+      }, 50);
+    } else {
+      // Usar la lógica de posicionamiento 3D original
+      moveCamera({ x: -17, y: 26 + y, z: 16 });
+
+      // Si estamos en vista 3D, debemos configurar el material del corte como azul
+      if (modelCloneRef.current) {
+        const blueFillMaterial = new THREE.MeshStandardMaterial({
+          color: 0x1f79db, // Azul para el modelo copiado en vista 3D
+          side: 2, // THREE.DoubleSide
+          transparent: true,
+          opacity: 1,
+          clippingPlanes: [
+            fillUpperClipPlaneRef.current,
+            fillLowerClipPlaneRef.current,
+          ],
+          clipShadows: true,
+          depthWrite: false,
+          stencilWrite: true,
+          stencilRef: 0,
+          stencilFunc: THREE.EqualStencilFunc,
+          stencilFail: THREE.KeepStencilOp,
+          stencilZFail: THREE.KeepStencilOp,
+          stencilZPass: THREE.ReplaceStencilOp,
+        });
+
+        modelCloneRef.current.traverse((node) => {
+          if (node.isMesh) {
+            node.material = blueFillMaterial;
+          }
+        });
+      }
+    }
   }
+
+  const toggle2D3DView = () => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    const n8aopass = n8aopassRef.current;
+
+    if (!camera || !controls) return;
+
+    // Toggle the state
+    setIsTopView(!isTopView);
+    isTopViewRef.current = !isTopViewRef.current;
+
+    if (!isTopView) {
+      // Switching to 2D view
+      setIsTopView(true);
+      isTopViewRef.current = true;
+      setCutLevel(2);
+
+      // Store current values
+      originalAoIntensityRef.current = targetIntensityRef.current;
+      originalCameraPositionRef.current = camera.position.clone();
+      originalControlsTargetRef.current = controls.target.clone();
+
+      // Higher intensity for better clarity in 2D
+      targetIntensityRef.current = 12;
+      if (n8aopass) {
+        n8aopass.configuration.intensity = 12;
+      }
+
+      // Calculate the center and height of your model
+      const boundingBox = new THREE.Box3().setFromObject(modelRef.current);
+      const center = boundingBox.getCenter(new THREE.Vector3());
+      const size = boundingBox.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.z) * 1.2;
+
+      // Get current cut level (if any)
+      const currentClipPlane = clipPlaneRef.current;
+      let cameraHeight;
+
+      if (currentClipPlane && currentClipPlane.constant !== 0) {
+        cameraHeight = currentClipPlane.constant + maxDim * 0.75;
+        // Configurar grosor para 2D
+        const cutLevel = currentClipPlane.constant;
+        fillUpperClipPlaneRef.current.set(
+          new THREE.Vector3(0, -1, 0),
+          cutLevel + 0.3
+        );
+        fillLowerClipPlaneRef.current.set(
+          new THREE.Vector3(0, 1, 0),
+          -(cutLevel - 0.3)
+        );
+      } else {
+        cameraHeight = center.y + maxDim * 0.75;
+      }
+
+      // Crear una timeline para la animación en etapas
+      const tl = gsap.timeline();
+
+      const elevationHeight = camera.position.y + maxDim * 0.5;
+      tl.to(camera.position, {
+        duration: 0.7,
+        y: elevationHeight,
+        ease: "power2.out",
+        onUpdate: () => controls.update(),
+      });
+
+      // Configurar la cámara y controles para vista 2D
+      tl.call(() => {
+        // Lock controls to prevent rotation
+        controls.enableRotate = false;
+        controls.minPolarAngle = 0;
+        controls.maxPolarAngle = 0;
+
+        // Update camera up vector to ensure correct orientation
+        camera.up.set(0, 0, -1);
+        camera.lookAt(center);
+        camera.updateProjectionMatrix();
+        controls.update();
+
+        // Apply black and white floor plan styling
+        applyBlackAndWhiteStyling();
+      });
+    } else {
+      // Switching back to 3D view
+      setCutLevel("none");
+      // Restore original N8AO intensity
+      if (originalAoIntensityRef.current !== undefined) {
+        targetIntensityRef.current = originalAoIntensityRef.current;
+
+        // Also apply directly for immediate effect
+        if (n8aopass) {
+          n8aopass.configuration.intensity = originalAoIntensityRef.current;
+        }
+      }
+
+      if (
+        originalCameraPositionRef.current &&
+        originalControlsTargetRef.current
+      ) {
+        // Restore original camera position and controls target
+        gsap.to(camera.position, {
+          duration: 1,
+          x: originalCameraPositionRef.current.x,
+          y: originalCameraPositionRef.current.y,
+          z: originalCameraPositionRef.current.z,
+          ease: "power2.inOut",
+          onUpdate: () => controls.update(),
+        });
+
+        gsap.to(controls.target, {
+          duration: 1,
+          x: originalControlsTargetRef.current.x,
+          y: originalControlsTargetRef.current.y,
+          z: originalControlsTargetRef.current.z,
+          ease: "power2.inOut",
+          onUpdate: () => controls.update(),
+        });
+      }
+
+      // Re-enable orbit controls
+      controls.enableRotate = true;
+      controls.minPolarAngle = 0;
+      controls.maxPolarAngle = Math.PI; // Allow full rotation
+
+      // Reset camera orientation
+      camera.up.set(0, 1, 0);
+      camera.updateProjectionMatrix();
+      controls.update();
+
+      // Restore original materials
+      restoreOriginalMaterials();
+
+      // Si hay un corte activo, restauramos el material azul y el grosor normal
+      if (clipPlaneRef.current && clipPlaneRef.current.constant !== 0) {
+        // Restaurar el grosor normal del corte
+        const cutLevel = clipPlaneRef.current.constant;
+        fillUpperClipPlaneRef.current.set(
+          new THREE.Vector3(0, -1, 0),
+          cutLevel + 0.1
+        );
+        fillLowerClipPlaneRef.current.set(
+          new THREE.Vector3(0, 1, 0),
+          -(cutLevel - 0.1)
+        );
+
+        // Restaurar el color azul al modelo clonado
+        if (modelCloneRef.current) {
+          const blueFillMaterial = new THREE.MeshStandardMaterial({
+            color: 0x1f79db, // Azul para el modelo copiado en vista 3D
+            side: 2, // THREE.DoubleSide
+            transparent: true,
+            opacity: 1,
+            clippingPlanes: [
+              fillUpperClipPlaneRef.current,
+              fillLowerClipPlaneRef.current,
+            ],
+            clipShadows: true,
+            depthWrite: false,
+            stencilWrite: true,
+            stencilRef: 0,
+            stencilFunc: THREE.EqualStencilFunc,
+            stencilFail: THREE.KeepStencilOp,
+            stencilZFail: THREE.KeepStencilOp,
+            stencilZPass: THREE.ReplaceStencilOp,
+          });
+
+          modelCloneRef.current.traverse((node) => {
+            if (node.isMesh) {
+              node.material = blueFillMaterial;
+            }
+          });
+        }
+      }
+    }
+  };
+
+  const applyBlackAndWhiteStyling = () => {
+    const model = modelRef.current;
+    const modelClone = modelCloneRef.current;
+    if (!model) return;
+
+    // Obtener planos de recorte actuales
+    const currentClippingPlanes = [];
+
+    // Añadir el plano de recorte actual si está activo
+    if (clipPlaneRef.current && clipPlaneRef.current.constant !== 0) {
+      currentClippingPlanes.push(clipPlaneRef.current);
+    }
+
+    // Crear materiales con los planos de recorte actuales
+    const structureMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff, // Blanco para la estructura (mesh[0])
+      side: THREE.DoubleSide,
+      clippingPlanes: currentClippingPlanes,
+      clipShadows: true,
+    });
+
+    const furnitureMaterial = new THREE.MeshBasicMaterial({
+      color: 0xaaaaaa, // Gris claro para muebles (mesh[1])
+      side: THREE.DoubleSide,
+      clippingPlanes: currentClippingPlanes,
+      clipShadows: true,
+    });
+
+    // Aplicar materiales basados en la estructura del modelo
+    // Asumiendo que model.children[0] es la estructura y model.children[1] son los muebles
+    if (model.children && model.children.length > 0) {
+      // Aplicar material blanco a la estructura (mesh[0])
+      if (model.children[0]) {
+        model.children[0].traverse((node) => {
+          if (node.isMesh) {
+            // Guardar material original si aún no se ha guardado
+            if (!originalMaterialsMapRef.current.has(node.uuid)) {
+              originalMaterialsMapRef.current.set(node.uuid, node.material);
+            }
+            node.material = structureMaterial.clone();
+          }
+        });
+      }
+
+      // Aplicar material gris claro a los muebles (mesh[1])
+      if (model.children.length > 1 && model.children[1]) {
+        model.children[1].traverse((node) => {
+          if (node.isMesh) {
+            // Guardar material original si aún no se ha guardado
+            if (!originalMaterialsMapRef.current.has(node.uuid)) {
+              originalMaterialsMapRef.current.set(node.uuid, node.material);
+            }
+            node.material = furnitureMaterial.clone();
+          }
+        });
+      }
+    } else {
+      // Alternativa si la estructura no está organizada en children[0] y children[1]
+      console.warn(
+        "La estructura del modelo no coincide con lo esperado. Aplicando estilos alternativos."
+      );
+
+      // Aplicar a todos los meshes
+      model.traverse((node) => {
+        if (node.isMesh) {
+          // Guardar material original
+          if (!originalMaterialsMapRef.current.has(node.uuid)) {
+            originalMaterialsMapRef.current.set(node.uuid, node.material);
+          }
+
+          // Por defecto, usar el material de estructura
+          node.material = structureMaterial.clone();
+        }
+      });
+    }
+
+    // Cambiar el color del modelo copiado a negro en vista 2D
+    if (modelClone) {
+      // Crear material negro para el modelo copiado
+      const fillMaterial = new THREE.MeshStandardMaterial({
+        color: 0x000000, // Negro para el modelo copiado en vista 2D
+        side: 2, // THREE.DoubleSide
+        transparent: true,
+        opacity: 1,
+        clippingPlanes: [
+          fillUpperClipPlaneRef.current,
+          fillLowerClipPlaneRef.current,
+        ],
+        clipShadows: true,
+        depthWrite: false,
+        stencilWrite: true,
+        stencilRef: 0,
+        stencilFunc: THREE.EqualStencilFunc,
+        stencilFail: THREE.KeepStencilOp,
+        stencilZFail: THREE.KeepStencilOp,
+        stencilZPass: THREE.ReplaceStencilOp,
+      });
+
+      modelClone.traverse((node) => {
+        if (node.isMesh) {
+          node.material = fillMaterial;
+        }
+      });
+    }
+  };
+
+  const restoreOriginalMaterials = () => {
+    const model = modelRef.current;
+    if (!model) return;
+
+    model.traverse((node) => {
+      if (node.isMesh && originalMaterialsMapRef.current.has(node.uuid)) {
+        node.material = originalMaterialsMapRef.current.get(node.uuid);
+      }
+    });
+  };
 
   function hideEnt(event) {
     const newState = event.target.checked;
@@ -1341,52 +1827,9 @@ const Visor = ({
               </MenuButton>
             </div>
           )}
+          <Button onClick={toggle2D3DView}>{isTopView ? "2D" : "3D"}</Button>
         </div>
       </nav>
-      <div
-        style={{
-          position: "absolute",
-          display: "flex",
-          top: "20px",
-          left: "20px",
-        }}
-      >
-        <MenuButton onClick={() => displayMEPs("arc")}>Arc</MenuButton>
-        <MenuButton onClick={() => displayMEPs("mep")}>Mep</MenuButton>
-        <MenuButton onClick={() => displayMEPs("str")}>Str</MenuButton>
-        <MenuButton onClick={() => displayMEPs("none")}>None</MenuButton>
-        <div className="flex items-center space-x-2">
-          <input
-            type="checkbox"
-            id="entVisibility"
-            checked={isVisible}
-            onChange={hideEnt}
-          />
-          <label htmlFor="entVisibility" style={{ color: "black" }}>
-            Mostrar ENT
-          </label>
-        </div>
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          display: "flex",
-          flexDirection: "column",
-          top: "20px",
-          right: "20px",
-        }}
-      >
-        {Object.entries(levelsRef.current)
-          .sort(([, a], [, b]) => b - a) // Ordenar de mayor a menor altura
-          .map(([level, height]) => (
-            <MenuButton key={level} onClick={() => setCutLevel(height)}>
-              {level} ({height.toFixed(2)}m)
-            </MenuButton>
-          ))}
-        <MenuButton key={level} onClick={() => setCutLevel("none")}>
-          None
-        </MenuButton>
-      </div>
     </div>
   );
 };

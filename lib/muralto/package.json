@@ -1,6 +1,6 @@
 {
   "name": "@madpug2022/muralto",
-  "version": "0.2.7",
+  "version": "0.3.1",
   "main": "dist/muralto.cjs.js",
   "module": "dist/muralto.es.js",
   "exports": {
